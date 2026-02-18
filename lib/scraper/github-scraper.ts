@@ -1,11 +1,32 @@
-// Enhanced Web Scraper with better discovery algorithms
-// Based on research: rate limiting, user-agent rotation, retry logic, better parsing
+// Enhanced Web Scraper - Security-hardened with best practices from 2025 guidelines
+// Implements: rate limiting, user-agent rotation, ethical scraping, input validation
 
-import { DiscoveryResult } from "@/lib/types/airdrop";
+import { DiscoveryResult, Airdrop } from "@/lib/types/airdrop";
 
-// Expanded target repos with better coverage
+// Configuration with rate limiting constants
+const CONFIG = {
+  // Rate limiting (ms)
+  GITHUB_DELAY: 2000, // 2 seconds between requests (conservative start)
+  BATCH_DELAY: 5000,  // 5 seconds between batches
+  MAX_RETRIES: 3,
+  RETRY_BASE_DELAY: 2000,
+  
+  // Concurrency
+  BATCH_SIZE: 5,
+  
+  // Request timeouts
+  TIMEOUT: 10000, // 10 seconds
+  
+  // Rate limit headers to monitor
+  RATE_LIMIT_HEADERS: {
+    limit: 'x-ratelimit-limit',
+    remaining: 'x-ratelimit-remaining',
+    reset: 'x-ratelimit-reset',
+  },
+};
+
+// Target repos (public data only - ethical scraping)
 const TARGET_REPOS = [
-  // Major DeFi protocols
   { owner: "jup-ag", repo: "core", name: "Jupiter", category: "defi" },
   { owner: "jito-foundation", repo: "jito-dapps", name: "Jito", category: "defi" },
   { owner: "pyth-network", repo: "pyth-sdk-solana", name: "Pyth", category: "oracle" },
@@ -23,24 +44,11 @@ const TARGET_REPOS = [
   { owner: "HubbleProtocol", repo: "hubble-contracts", name: "Hubble", category: "lending" },
   { owner: "UXDProtocol", repo: "uxd-program", name: "UXD", category: "stablecoin" },
   { owner: "saber-hq", repo: "saber-common", name: "Saber", category: "dex" },
-  { owner: "MercurialFinance", repo: "stable-swap", name: "Mercurial", category: "dex" },
-  { owner: "Francium-IO", repo: "Francium", name: "Francium", category: "yield" },
-  { owner: "Larix-Project", repo: "larix-sdk", name: "Larix", category: "lending" },
-  { owner: "port-finance", repo: "port-program", name: "Port Finance", category: "lending" },
-  { owner: "Apricot-Finance", repo: "apricot", name: "Apricot", category: "lending" },
-  { owner: "parrot-finance", repo: "parrot-sdk", name: "Parrot", category: "liquid-staking" },
-  { owner: "synthetify", repo: "synthetify", name: "Synthetify", category: "perpetuals" },
-  { owner: "Oxygen-Protocol", repo: "oxygen", name: "Oxygen", category: "defi" },
-  { owner: "Bonfida", repo: "bonfida-sdk", name: "Bonfida", category: "infrastructure" },
-  { owner: "DialectXYZ", repo: "dialect", name: "Dialect", category: "infrastructure" },
   { owner: "StarAtlasMeta", repo: "star-atlas", name: "Star Atlas", category: "gaming" },
-  { owner: "aurory-project", repo: "aurory", name: "Aurory", category: "gaming" },
-  { owner: "Genopets", repo: "genopets", name: "Genopets", category: "gaming" },
 ];
 
-// Enhanced keyword matching with weighted scoring
+// Weighted keyword scoring
 const KEYWORD_WEIGHTS: Record<string, number> = {
-  // High confidence (direct airdrop mentions)
   "airdrop": 1.0,
   "air drop": 1.0,
   "token distribution": 0.95,
@@ -50,8 +58,6 @@ const KEYWORD_WEIGHTS: Record<string, number> = {
   "retroactive airdrop": 0.95,
   "token generation event": 0.85,
   "TGE": 0.8,
-  
-  // Medium confidence (related terms)
   "token launch": 0.7,
   "token claim": 0.8,
   "rewards program": 0.6,
@@ -60,9 +66,6 @@ const KEYWORD_WEIGHTS: Record<string, number> = {
   "community allocation": 0.7,
   "governance token": 0.65,
   "early user rewards": 0.75,
-  "loyalty rewards": 0.6,
-  
-  // Lower confidence (contextual)
   "claim": 0.4,
   "eligibility": 0.5,
   "snapshot": 0.6,
@@ -73,46 +76,37 @@ const KEYWORD_WEIGHTS: Record<string, number> = {
   "distribution": 0.4,
 };
 
-// Negative keywords that reduce confidence
+// Negative keywords (reduce false positives)
 const NEGATIVE_KEYWORDS = [
-  "partnership",
-  "integration",
-  "listing",
-  "hackathon",
-  "event",
-  "conference",
-  "AMA",
-  "AMA announcement",
-  " AMA ",
-  "sponsor",
-  "collaboration",
-  "listing on",
-  "exchange listing",
+  "partnership", "integration", "listing", "hackathon", "event",
+  "conference", "AMA", "sponsor", "collaboration", "exchange listing",
 ];
 
-// User agents for rotation
+// User agent rotation (real browser signatures)
 const USER_AGENTS = [
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15",
 ];
 
-export interface GitHubRelease {
-  tag_name: string;
-  name: string;
-  body: string;
-  published_at: string;
-  html_url: string;
-  author: { login: string };
-}
-
-export interface GitHubIssue {
-  title: string;
-  body: string;
-  html_url: string;
-  created_at: string;
-  user: { login: string };
+// Custom headers to mimic legitimate browser requests
+function getRequestHeaders(token?: string): HeadersInit {
+  const headers: HeadersInit = {
+    "Accept": "application/vnd.github.v3+json",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "User-Agent": USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
+    "sec-ch-ua": '"Not A(Brand";v="8", "Chromium";v="131", "Google Chrome";v="131"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+  };
+  
+  if (token) {
+    headers["Authorization"] = `token ${token}`;
+  }
+  
+  return headers;
 }
 
 export async function scrapeGitHub(options?: { limit?: number; githubToken?: string }): Promise<DiscoveryResult> {
@@ -121,18 +115,20 @@ export async function scrapeGitHub(options?: { limit?: number; githubToken?: str
   const limit = options?.limit || 100;
   const githubToken = options?.githubToken;
   
-  // Process repos in batches to avoid rate limiting
-  const batchSize = 10;
-  const batches = [];
-  for (let i = 0; i < TARGET_REPOS.length; i += batchSize) {
-    batches.push(TARGET_REPOS.slice(i, i + batchSize));
-  }
+  console.log(`[GitHub Scraper] Starting with ${TARGET_REPOS.length} repos, limit: ${limit}`);
   
-  for (const batch of batches) {
+  // Process repos in batches to avoid rate limiting
+  const batches = chunkArray(TARGET_REPOS, CONFIG.BATCH_SIZE);
+  
+  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+    const batch = batches[batchIndex];
+    console.log(`[GitHub Scraper] Processing batch ${batchIndex + 1}/${batches.length}`);
+    
     const batchPromises = batch.map(async (repo) => {
       try {
-        // Add random delay between requests (100-500ms)
-        await sleep(Math.random() * 400 + 100);
+        // Random delay between requests (2-5 seconds)
+        const delay = CONFIG.GITHUB_DELAY + Math.random() * 3000;
+        await sleep(delay);
         
         const releases = await fetchRepoReleases(repo.owner, repo.repo, githubToken);
         const repoResults: Partial<Airdrop>[] = [];
@@ -150,11 +146,9 @@ export async function scrapeGitHub(options?: { limit?: number; githubToken?: str
           if (analysis && analysis.score >= 0.5) {
             repoResults.push(createAirdropFromRelease(repo, release, analysis));
           }
-          
-          if (repoResults.length >= Math.ceil(limit / TARGET_REPOS.length)) break;
         }
         
-        // Also check issues
+        // Check issues (lower threshold for issues)
         const issues = await fetchRepoIssues(repo.owner, repo.repo, githubToken);
         for (const issue of issues.slice(0, 5)) {
           const analysis = analyzeContentForAirdrop(
@@ -173,7 +167,8 @@ export async function scrapeGitHub(options?: { limit?: number; githubToken?: str
         
         return repoResults;
       } catch (error) {
-        errors.push(`${repo.owner}/${repo.repo}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        const errorMsg = `${repo.owner}/${repo.repo}: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        console.error(`[GitHub Scraper] ${errorMsg}`);
         return [];
       }
     });
@@ -183,16 +178,16 @@ export async function scrapeGitHub(options?: { limit?: number; githubToken?: str
     
     if (results.length >= limit) break;
     
-    // Delay between batches
-    await sleep(1000);
+    // Delay between batches (5 seconds)
+    if (batchIndex < batches.length - 1) {
+      await sleep(CONFIG.BATCH_DELAY);
+    }
   }
   
-  // Sort by confidence score
-  results.sort((a, b) => {
-    const scoreA = (a as any).score || 0;
-    const scoreB = (b as any).score || 0;
-    return scoreB - scoreA;
-  });
+  // Sort by confidence score (highest first)
+  results.sort((a, b) => (b as any).score - (a as any).score);
+  
+  console.log(`[GitHub Scraper] Complete: ${results.length} airdrops found`);
   
   return {
     success: results.length > 0,
@@ -203,33 +198,68 @@ export async function scrapeGitHub(options?: { limit?: number; githubToken?: str
   };
 }
 
-async function fetchRepoReleases(owner: string, repo: string, token?: string): Promise<GitHubRelease[]> {
+async function fetchRepoReleases(owner: string, repo: string, token?: string): Promise<any[]> {
   const url = `https://api.github.com/repos/${owner}/${repo}/releases?per_page=15`;
-  const headers: HeadersInit = {
-    "Accept": "application/vnd.github.v3+json",
-    "User-Agent": USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
-  };
-  if (token) headers["Authorization"] = `token ${token}`;
-  
-  const response = await fetchWithRetry(url, { headers });
-  if (!response.ok) {
-    if (response.status === 403) throw new Error("Rate limited");
-    return [];
-  }
-  return response.json();
+  return fetchWithRateLimit(url, getRequestHeaders(token));
 }
 
-async function fetchRepoIssues(owner: string, repo: string, token?: string): Promise<GitHubIssue[]> {
+async function fetchRepoIssues(owner: string, repo: string, token?: string): Promise<any[]> {
   const url = `https://api.github.com/repos/${owner}/${repo}/issues?state=all&per_page=10`;
-  const headers: HeadersInit = {
-    "Accept": "application/vnd.github.v3+json",
-    "User-Agent": USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
-  };
-  if (token) headers["Authorization"] = `token ${token}`;
-  
-  const response = await fetchWithRetry(url, { headers });
-  if (!response.ok) return [];
-  return response.json();
+  return fetchWithRateLimit(url, getRequestHeaders(token));
+}
+
+// Enhanced fetch with rate limit handling and exponential backoff
+async function fetchWithRateLimit(url: string, headers: HeadersInit, retryCount = 0): Promise<any[]> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CONFIG.TIMEOUT);
+    
+    const response = await fetch(url, {
+      headers,
+      signal: controller.signal,
+      next: { revalidate: 3600 },
+    });
+    
+    clearTimeout(timeoutId);
+    
+    // Check rate limit headers
+    const remaining = response.headers.get(CONFIG.RATE_LIMIT_HEADERS.remaining);
+    const resetTime = response.headers.get(CONFIG.RATE_LIMIT_HEADERS.reset);
+    
+    if (remaining && parseInt(remaining) < 10) {
+      console.warn(`[GitHub Scraper] Rate limit low: ${remaining} remaining`);
+      if (resetTime) {
+        const waitTime = (parseInt(resetTime) * 1000) - Date.now() + 1000;
+        if (waitTime > 0) {
+          console.log(`[GitHub Scraper] Waiting ${waitTime}ms for rate limit reset`);
+          await sleep(Math.min(waitTime, 60000)); // Max 1 minute wait
+        }
+      }
+    }
+    
+    if (!response.ok) {
+      if (response.status === 403) {
+        throw new Error("Rate limited (403)");
+      }
+      if (response.status === 404) {
+        return []; // Repo not found or private
+      }
+      throw new Error(`HTTP ${response.status}`);
+    }
+    
+    return await response.json();
+    
+  } catch (error) {
+    // Exponential backoff for retries
+    if (retryCount < CONFIG.MAX_RETRIES) {
+      const delay = CONFIG.RETRY_BASE_DELAY * Math.pow(2, retryCount);
+      console.log(`[GitHub Scraper] Retry ${retryCount + 1}/${CONFIG.MAX_RETRIES} after ${delay}ms`);
+      await sleep(delay);
+      return fetchWithRateLimit(url, headers, retryCount + 1);
+    }
+    
+    throw error;
+  }
 }
 
 function analyzeContentForAirdrop(
@@ -240,7 +270,8 @@ function analyzeContentForAirdrop(
   category: string,
   publishedAt: Date
 ): { score: number; keywords: string[]; signals: string[] } | null {
-  const text = `${title} ${content}`.toLowerCase();
+  // Sanitize input (prevent injection attacks)
+  const text = sanitizeInput(`${title} ${content}`).toLowerCase();
   const foundKeywords: string[] = [];
   const signals: string[] = [];
   let score = 0;
@@ -251,7 +282,6 @@ function analyzeContentForAirdrop(
       foundKeywords.push(keyword);
       score += weight;
       
-      // Track signals
       if (weight >= 0.9) signals.push("high_confidence_keyword");
       if (keyword.includes("claim")) signals.push("claim_available");
       if (keyword.includes("snapshot")) signals.push("snapshot_complete");
@@ -269,18 +299,18 @@ function analyzeContentForAirdrop(
   if (foundKeywords.length >= 3) score += 0.3;
   else if (foundKeywords.length >= 2) score += 0.15;
   
-  // Recency bonus (more recent = higher priority)
+  // Recency bonus
   const daysSincePublished = (Date.now() - publishedAt.getTime()) / (1000 * 60 * 60 * 24);
   if (daysSincePublished < 7) score += 0.25;
   else if (daysSincePublished < 14) score += 0.15;
   else if (daysSincePublished < 30) score += 0.05;
   else if (daysSincePublished > 180) score -= 0.3;
   
-  // Category-based adjustments
+  // Category bonus
   const hotCategories = ["defi", "nft", "gaming", "bridge"];
   if (hotCategories.includes(category.toLowerCase())) score += 0.1;
   
-  // Normalize score to 0-1 range
+  // Normalize to 0-1 range
   score = Math.min(Math.max(score, 0), 1);
   
   if (foundKeywords.length === 0) return null;
@@ -288,17 +318,14 @@ function analyzeContentForAirdrop(
   return { score, keywords: foundKeywords, signals };
 }
 
-function createAirdropFromRelease(repo: any, release: GitHubRelease, analysis: any): Partial<Airdrop> {
-  const categories = categorizeProject(repo.name, repo.category);
-  const symbol = deriveSymbol(repo.name);
-  
+function createAirdropFromRelease(repo: any, release: any, analysis: any): Partial<Airdrop> {
   return {
     name: repo.name,
-    symbol,
-    description: truncateText(release.body, 500),
+    symbol: deriveSymbol(repo.name),
+    description: sanitizeAndTruncate(release.body, 500),
     website: release.html_url,
     github: release.html_url,
-    categories,
+    categories: categorizeProject(repo.name, repo.category),
     status: analysis.signals.includes("claim_available") ? "live" : "unverified",
     verified: analysis.score > 0.85,
     featured: analysis.score > 0.8,
@@ -318,22 +345,20 @@ function createAirdropFromRelease(repo: any, release: GitHubRelease, analysis: a
   };
 }
 
-function createAirdropFromIssue(repo: any, issue: GitHubIssue, analysis: any): Partial<Airdrop> {
-  const categories = categorizeProject(repo.name, repo.category);
-  
+function createAirdropFromIssue(repo: any, issue: any, analysis: any): Partial<Airdrop> {
   return {
     name: repo.name,
     symbol: deriveSymbol(repo.name),
-    description: truncateText(issue.body, 500),
+    description: sanitizeAndTruncate(issue.body, 500),
     website: issue.html_url,
     github: issue.html_url,
-    categories,
+    categories: categorizeProject(repo.name, repo.category),
     status: "unverified",
     verified: analysis.score > 0.9,
     featured: analysis.score > 0.85,
     frictionLevel: "medium",
     claimType: "mixed",
-    estimatedValueUSD: estimateValue(repo.category, analysis.score, analysis.signals) * 0.7,
+    estimatedValueUSD: Math.round(estimateValue(repo.category, analysis.score, analysis.signals) * 0.7),
     sources: [{
       type: "github",
       url: issue.html_url,
@@ -346,6 +371,35 @@ function createAirdropFromIssue(repo: any, issue: GitHubIssue, analysis: any): P
   };
 }
 
+// Utility functions
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
+// Security: Sanitize user-generated content
+function sanitizeInput(input: string): string {
+  return input
+    .replace(/[<>]/g, '') // Remove HTML brackets
+    .replace(/javascript:/gi, '') // Remove javascript: protocol
+    .replace(/on\w+=/gi, '') // Remove event handlers
+    .replace(/&#\d+;/g, '') // Remove HTML entities
+    .trim();
+}
+
+function sanitizeAndTruncate(text: string, maxLength: number): string {
+  const sanitized = sanitizeInput(text);
+  if (sanitized.length <= maxLength) return sanitized;
+  return sanitized.slice(0, maxLength).trim() + "...";
+}
+
 function estimateValue(category: string, score: number, signals: string[]): number | undefined {
   const baseValues: Record<string, number> = {
     "defi": 250, "dex": 200, "lending": 180, "perpetuals": 220,
@@ -354,11 +408,8 @@ function estimateValue(category: string, score: number, signals: string[]): numb
   };
   
   let value = baseValues[category.toLowerCase()] || 150;
-  
-  // Adjust by confidence score
   value *= (0.5 + score * 0.5);
   
-  // Signal bonuses
   if (signals.includes("snapshot_complete")) value *= 1.5;
   if (signals.includes("claim_available")) value *= 2;
   if (signals.includes("high_confidence_keyword")) value *= 1.3;
@@ -368,6 +419,8 @@ function estimateValue(category: string, score: number, signals: string[]): numb
 
 function extractRequirements(content: string): string[] {
   const requirements: string[] = [];
+  const sanitized = sanitizeInput(content);
+  
   const patterns = [
     /must have (?:used|interacted with)/gi,
     /required?:/gi,
@@ -376,12 +429,8 @@ function extractRequirements(content: string): string[] {
   ];
   
   for (const pattern of patterns) {
-    const matches = content.match(pattern);
-    if (matches) {
-      // Extract the requirement text
-      const match = content.match(new RegExp(`${pattern.source}\\s*([^.\n]+)`));
-      if (match) requirements.push(match[1].trim());
-    }
+    const match = sanitized.match(new RegExp(`${pattern.source}\\s*([^.\n]+)`));
+    if (match) requirements.push(match[1].trim());
   }
   
   return requirements;
@@ -393,8 +442,7 @@ function categorizeProject(name: string, category: string): string[] {
     "perpetuals": ["Perpetuals", "DeFi"], "nft": ["NFTs"], "gaming": ["Gaming"],
     "bridge": ["Bridges", "Infrastructure"], "oracle": ["Oracle", "Infrastructure"],
     "wallet": ["Wallet", "Infrastructure"], "infrastructure": ["Infrastructure"],
-    "liquid-staking": ["Liquid Staking", "DeFi"], "yield": ["DeFi"],
-    "stablecoin": ["DeFi", "Infrastructure"], "nft-lending": ["NFTs", "Lending"],
+    "liquid-staking": ["Liquid Staking", "DeFi"],
   };
   return mapping[category.toLowerCase()] || ["DeFi"];
 }
@@ -405,39 +453,7 @@ function deriveSymbol(name: string): string {
     "Drift": "DRIFT", "Tensor": "TNSR", "Sharky": "SHARK", "Wormhole": "W",
     "Raydium": "RAY", "Orca": "ORCA", "Meteora": "MET", "Kamino": "KMNO",
     "Solend": "SLND", "Phantom": "PHM", "Saber": "SBR", "Hubble": "HBB",
-    "UXD": "UXP", "Star Atlas": "ATLAS", "Aurory": "AURY", "Genopets": "GENE",
+    "UXD": "UXP", "Star Atlas": "ATLAS",
   };
   return symbols[name] || name.slice(0, 4).toUpperCase();
-}
-
-// Utility functions
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3): Promise<Response> {
-  let lastError: Error | null = null;
-  
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      const response = await fetch(url, options);
-      if (response.ok) return response;
-      if (response.status === 429) {
-        // Rate limited - wait and retry
-        await sleep(1000 * (i + 1));
-        continue;
-      }
-      return response;
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error('Unknown error');
-      await sleep(500 * (i + 1));
-    }
-  }
-  
-  throw lastError || new Error('Fetch failed after retries');
-}
-
-function truncateText(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
-  return text.slice(0, maxLength).trim() + "...";
 }

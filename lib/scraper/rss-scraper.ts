@@ -1,55 +1,57 @@
-// RSS Feed Scraper - Enhanced with better parsing and source validation
+// RSS Feed Scraper - Security-hardened with best practices
+// Implements: rate limiting, concurrent processing, input sanitization
 
-import { DiscoveryResult } from "@/lib/types/airdrop";
+import { DiscoveryResult, Airdrop } from "@/lib/types/airdrop";
+
+const CONFIG = {
+  CONCURRENCY_LIMIT: 5,
+  BATCH_DELAY: 2000,
+  TIMEOUT: 10000,
+  MAX_RETRIES: 3,
+};
 
 const RSS_FEEDS = [
-  // Major protocol blogs
-  { name: "Solana Foundation", url: "https://solana.com/news", category: "ecosystem", baseUrl: "https://solana.com" },
-  { name: "Jupiter", url: "https://blog.jup.ag/rss", category: "defi", baseUrl: "https://blog.jup.ag" },
-  { name: "Magic Eden", url: "https://magiceden.io/blog/rss", category: "nft", baseUrl: "https://magicedien.io" },
-  { name: "Phantom", url: "https://phantom.app/blog/rss", category: "wallet", baseUrl: "https://phantom.app" },
-  { name: "Marinade Finance", url: "https://marinade.finance/blog/rss", category: "defi", baseUrl: "https://marinade.finance" },
-  { name: "Raydium", url: "https://raydium.io/blog/rss", category: "defi", baseUrl: "https://raydium.io" },
-  { name: "Orca", url: "https://www.orca.so/blog/rss", category: "defi", baseUrl: "https://orca.so" },
-  { name: "Meteora", url: "https://meteora.ag/blog/rss", category: "defi", baseUrl: "https://meteora.ag" },
-  { name: "Kamino", url: "https://kamino.finance/blog/rss", category: "defi", baseUrl: "https://kamino.finance" },
-  { name: "Drift Protocol", url: "https://drift.trade/blog/rss", category: "defi", baseUrl: "https://drift.trade" },
-  { name: "Tensor", url: "https://tensor.trade/blog/rss", category: "nft", baseUrl: "https://tensor.trade" },
-  { name: "Wormhole", url: "https://wormhole.com/blog/rss", category: "bridge", baseUrl: "https://wormhole.com" },
-  { name: "Pyth Network", url: "https://pyth.network/blog/rss", category: "oracle", baseUrl: "https://pyth.network" },
-  { name: "Jito", url: "https://jito.network/blog/rss", category: "defi", baseUrl: "https://jito.network" },
-  { name: "MarginFi", url: "https://marginfi.com/blog/rss", category: "defi", baseUrl: "https://marginfi.com" },
-  { name: "Solend", url: "https://solend.fi/blog/rss", category: "defi", baseUrl: "https://solend.fi" },
-  { name: "Star Atlas", url: "https://staratlas.com/blog/rss", category: "gaming", baseUrl: "https://staratlas.com" },
-  { name: "Sharky", url: "https://sharky.fi/blog/rss", category: "defi", baseUrl: "https://sharky.fi" },
+  { name: "Solana Foundation", url: "https://solana.com/news", category: "ecosystem" },
+  { name: "Jupiter", url: "https://blog.jup.ag/rss", category: "defi" },
+  { name: "Magic Eden", url: "https://magiceden.io/blog/rss", category: "nft" },
+  { name: "Phantom", url: "https://phantom.app/blog/rss", category: "wallet" },
+  { name: "Marinade Finance", url: "https://marinade.finance/blog/rss", category: "defi" },
+  { name: "Raydium", url: "https://raydium.io/blog/rss", category: "defi" },
+  { name: "Orca", url: "https://www.orca.so/blog/rss", category: "defi" },
+  { name: "Meteora", url: "https://meteora.ag/blog/rss", category: "defi" },
+  { name: "Kamino", url: "https://kamino.finance/blog/rss", category: "defi" },
+  { name: "Drift Protocol", url: "https://drift.trade/blog/rss", category: "defi" },
+  { name: "Tensor", url: "https://tensor.trade/blog/rss", category: "nft" },
+  { name: "Wormhole", url: "https://wormhole.com/blog/rss", category: "bridge" },
+  { name: "Pyth Network", url: "https://pyth.network/blog/rss", category: "oracle" },
+  { name: "Jito", url: "https://jito.network/blog/rss", category: "defi" },
+  { name: "MarginFi", url: "https://marginfi.com/blog/rss", category: "defi" },
+  { name: "Solend", url: "https://solend.fi/blog/rss", category: "defi" },
+  { name: "Star Atlas", url: "https://staratlas.com/blog/rss", category: "gaming" },
+  { name: "Sharky", url: "https://sharky.fi/blog/rss", category: "defi" },
 ];
 
-const AIRDROP_KEYWORDS = [
-  "airdrop", "token", "claim", "eligibility", "snapshot", "distribution",
-  "rewards", "retroactive", "points", "season", "allocation", "genesis",
-  "launch", "TGE", "token generation", "community rewards", "early user",
-];
-
-export interface RSSItem {
-  title: string;
-  link: string;
-  pubDate?: string;
-  description?: string;
-  content?: string;
-  author?: string;
-  imageUrl?: string;
-}
+const KEYWORD_WEIGHTS: Record<string, number> = {
+  "airdrop": 1.0, "claim": 0.8, "eligibility": 0.7, "snapshot": 0.8,
+  "token": 0.5, "rewards": 0.6, "retroactive": 0.9, "points": 0.5,
+  "distribution": 0.6, "launch": 0.5, "TGE": 0.7,
+};
 
 export async function scrapeRSSFeeds(options?: { limit?: number }): Promise<DiscoveryResult> {
   const results: Partial<Airdrop>[] = [];
   const errors: string[] = [];
   const limit = options?.limit || 50;
   
-  // Process feeds in parallel with concurrency limit
-  const concurrencyLimit = 5;
-  for (let i = 0; i < RSS_FEEDS.length; i += concurrencyLimit) {
-    const batch = RSS_FEEDS.slice(i, i + concurrencyLimit);
-    const batchPromises = batch.map(feed => scrapeFeed(feed, limit));
+  console.log(`[RSS Scraper] Starting with ${RSS_FEEDS.length} feeds`);
+  
+  // Process feeds in batches with concurrency limit
+  const batches = chunkArray(RSS_FEEDS, CONFIG.CONCURRENCY_LIMIT);
+  
+  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+    const batch = batches[batchIndex];
+    console.log(`[RSS Scraper] Processing batch ${batchIndex + 1}/${batches.length}`);
+    
+    const batchPromises = batch.map(feed => scrapeFeed(feed));
     const batchResults = await Promise.allSettled(batchPromises);
     
     for (const result of batchResults) {
@@ -64,9 +66,16 @@ export async function scrapeRSSFeeds(options?: { limit?: number }): Promise<Disc
     
     if (results.length >= limit) break;
     
-    // Small delay between batches
-    await new Promise(resolve => setTimeout(resolve, 200));
+    // Delay between batches
+    if (batchIndex < batches.length - 1) {
+      await sleep(CONFIG.BATCH_DELAY);
+    }
   }
+  
+  // Sort by confidence
+  results.sort((a, b) => (b as any).score - (a as any).score);
+  
+  console.log(`[RSS Scraper] Complete: ${results.length} airdrops found`);
   
   return {
     success: results.length > 0,
@@ -77,17 +86,21 @@ export async function scrapeRSSFeeds(options?: { limit?: number }): Promise<Disc
   };
 }
 
-async function scrapeFeed(feed: typeof RSS_FEEDS[0], limit: number): Promise<{ airdrop?: Partial<Airdrop>; error?: string } | null> {
+async function scrapeFeed(feed: typeof RSS_FEEDS[0]): Promise<{ airdrop?: Partial<Airdrop>; error?: string } | null> {
   try {
     const proxyUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feed.url)}`;
     
     const response = await fetchWithRetry(proxyUrl);
-    if (!response.ok) return { error: `${feed.name}: Failed to fetch` };
+    if (!response.ok) {
+      return { error: `${feed.name}: Failed to fetch (${response.status})` };
+    }
     
     const data = await response.json();
-    if (data.status !== "ok") return { error: `${feed.name}: Invalid RSS response` };
+    if (data.status !== "ok") {
+      return { error: `${feed.name}: Invalid RSS response` };
+    }
     
-    // Check recent items
+    // Analyze recent items
     for (const item of data.items.slice(0, 5)) {
       const analysis = analyzeContentForAirdrop(
         item.title,
@@ -119,18 +132,14 @@ function analyzeContentForAirdrop(
   category: string,
   pubDate?: Date
 ): { score: number; keywords: string[]; signals: string[] } | null {
-  const text = `${title} ${description}`.toLowerCase();
+  // Sanitize input
+  const text = sanitizeInput(`${title} ${description}`).toLowerCase();
   const foundKeywords: string[] = [];
   const signals: string[] = [];
   let score = 0;
   
-  // Keyword matching with weights
-  const weights: Record<string, number> = {
-    "airdrop": 1.0, "claim": 0.8, "eligibility": 0.7, "snapshot": 0.8,
-    "token": 0.5, "rewards": 0.6, "retroactive": 0.9, "points": 0.5,
-  };
-  
-  for (const [keyword, weight] of Object.entries(weights)) {
+  // Weighted keyword matching
+  for (const [keyword, weight] of Object.entries(KEYWORD_WEIGHTS)) {
     if (text.includes(keyword)) {
       foundKeywords.push(keyword);
       score += weight;
@@ -138,7 +147,7 @@ function analyzeContentForAirdrop(
     }
   }
   
-  // Check for claim-related phrases
+  // Claim phrase detection
   const claimPhrases = ["claim now", "check eligibility", "claim your", "airdrop live"];
   for (const phrase of claimPhrases) {
     if (text.includes(phrase)) {
@@ -171,19 +180,19 @@ function analyzeContentForAirdrop(
 }
 
 function extractAirdropData(
-  item: RSSItem,
+  item: any,
   feed: typeof RSS_FEEDS[0],
   analysis: { score: number; keywords: string[]; signals: string[] }
 ): Partial<Airdrop> {
   const categories = categorizeFeed(feed.category);
-  const projectName = extractProjectName(item.title, feed.name);
+  const projectName = sanitizeInput(extractProjectName(item.title, feed.name));
   const claimUrl = extractClaimUrl(item.description || "", item.link);
   const estimatedValue = estimateValue(feed.category, analysis.score, analysis.signals);
   
   return {
     name: projectName,
     symbol: deriveSymbol(projectName),
-    description: truncateText(item.description || item.title, 500),
+    description: sanitizeAndTruncate(item.description || item.title, 500),
     website: item.link,
     blog: feed.url,
     categories,
@@ -207,6 +216,55 @@ function extractAirdropData(
 }
 
 // Utility functions
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
+async function fetchWithRetry(url: string, retryCount = 0): Promise<Response> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CONFIG.TIMEOUT);
+    
+    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    
+    if (response.ok) return response;
+    
+    throw new Error(`HTTP ${response.status}`);
+  } catch (error) {
+    if (retryCount < CONFIG.MAX_RETRIES) {
+      const delay = 1000 * Math.pow(2, retryCount);
+      await sleep(delay);
+      return fetchWithRetry(url, retryCount + 1);
+    }
+    throw error;
+  }
+}
+
+// Security functions
+function sanitizeInput(input: string): string {
+  return input
+    .replace(/[<>]/g, '')
+    .replace(/javascript:/gi, '')
+    .replace(/on\w+=/gi, '')
+    .replace(/&#\d+;/g, '')
+    .trim();
+}
+
+function sanitizeAndTruncate(text: string, maxLength: number): string {
+  const sanitized = sanitizeInput(text);
+  if (sanitized.length <= maxLength) return sanitized;
+  return sanitized.slice(0, maxLength).trim() + "...";
+}
+
 function extractProjectName(title: string, feedName: string): string {
   const patterns = [
     /([A-Z][a-zA-Z]+) (?:Airdrop|Token|Launch)/i,
@@ -227,7 +285,7 @@ function extractClaimUrl(content: string, baseUrl: string): string | null {
   for (const pattern of claimPatterns) {
     const matches = content.match(pattern);
     if (matches && matches.length > 0) {
-      let url = matches[0];
+      let url = sanitizeInput(matches[0]);
       if (!url.startsWith("http")) url = "https://" + url;
       return url;
     }
@@ -257,19 +315,4 @@ function categorizeFeed(category: string): string[] {
 
 function deriveSymbol(name: string): string {
   return name.slice(0, 4).toUpperCase().replace(/[^A-Z]/g, "");
-}
-
-function truncateText(text: string, maxLength: number): string {
-  return text.length <= maxLength ? text : text.slice(0, maxLength).trim() + "...";
-}
-
-async function fetchWithRetry(url: string, maxRetries = 3): Promise<Response> {
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) return response;
-      await new Promise(resolve => setTimeout(resolve, 500 * (i + 1)));
-    } catch {}
-  }
-  throw new Error('Fetch failed');
 }

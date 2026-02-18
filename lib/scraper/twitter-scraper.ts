@@ -1,6 +1,15 @@
-// Twitter/X Scraper - Enhanced with better rate limiting and signal detection
+// Twitter/X Scraper - Security-hardened with rate limit handling
+// Implements: batch processing, exponential backoff, input sanitization
 
-import { DiscoveryResult } from "@/lib/types/airdrop";
+import { DiscoveryResult, Airdrop } from "@/lib/types/airdrop";
+
+const CONFIG = {
+  BATCH_SIZE: 5,
+  BATCH_DELAY: 3000,
+  TIMEOUT: 10000,
+  MAX_RETRIES: 3,
+  RATE_LIMIT_BACKOFF: 5000,
+};
 
 const TWITTER_ACCOUNTS = [
   { username: "solana", name: "Solana", category: "ecosystem" },
@@ -20,15 +29,11 @@ const TWITTER_ACCOUNTS = [
   { username: "MagicEden", name: "Magic Eden", category: "nft" },
 ];
 
-const AIRDROP_PHRASES = [
-  "airdrop", "claim now", "check eligibility", "snapshot taken",
-  "retroactive", "token claim", "airdrop live", "claim your",
-];
-
-const HIGH_SIGNAL_PHRASES = [
-  "airdrop is live", "claim your", "check if you're eligible",
-  "snapshot has been taken", "retroactive airdrop",
-];
+const KEYWORD_WEIGHTS: Record<string, number> = {
+  "airdrop": 1.0, "claim now": 0.9, "check eligibility": 0.8,
+  "snapshot taken": 0.9, "retroactive": 0.9, "token claim": 0.8,
+  "airdrop live": 0.95, "claim your": 0.85,
+};
 
 export interface Tweet {
   id: string;
@@ -47,14 +52,29 @@ export async function scrapeTwitter(options?: { limit?: number; twitterBearerTok
   const bearerToken = options?.twitterBearerToken;
   
   if (!bearerToken) {
-    return { success: false, airdrops: [], errors: ["Twitter API token not configured"], source: "twitter", scrapedAt: new Date() };
+    return { 
+      success: false, 
+      airdrops: [], 
+      errors: ["Twitter API token not configured. Add it in Settings."], 
+      source: "twitter", 
+      scrapedAt: new Date() 
+    };
   }
   
+  console.log(`[Twitter Scraper] Starting with ${TWITTER_ACCOUNTS.length} accounts`);
+  
   // Process accounts in batches
-  const batchSize = 5;
-  for (let i = 0; i < TWITTER_ACCOUNTS.length; i += batchSize) {
-    const batch = TWITTER_ACCOUNTS.slice(i, i + batchSize);
-    const batchPromises = batch.map(account => fetchAndAnalyzeTweets(account, bearerToken, limit));
+  const batches = chunkArray(TWITTER_ACCOUNTS, CONFIG.BATCH_SIZE);
+  
+  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+    const batch = batches[batchIndex];
+    console.log(`[Twitter Scraper] Processing batch ${batchIndex + 1}/${batches.length}`);
+    
+    const batchPromises = batch.map(account => 
+      fetchAndAnalyzeTweets(account, bearerToken, limit)
+        .catch(error => ({ error: `@${account.username}: ${error instanceof Error ? error.message : 'Unknown error'}` }))
+    );
+    
     const batchResults = await Promise.allSettled(batchPromises);
     
     for (const result of batchResults) {
@@ -70,8 +90,15 @@ export async function scrapeTwitter(options?: { limit?: number; twitterBearerTok
     if (results.length >= limit) break;
     
     // Delay between batches to avoid rate limiting
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    if (batchIndex < batches.length - 1) {
+      await sleep(CONFIG.BATCH_DELAY);
+    }
   }
+  
+  // Sort by engagement and confidence
+  results.sort((a, b) => (b as any).engagement - (a as any).engagement);
+  
+  console.log(`[Twitter Scraper] Complete: ${results.length} airdrops found`);
   
   return {
     success: results.length > 0,
@@ -86,7 +113,7 @@ async function fetchAndAnalyzeTweets(
   account: typeof TWITTER_ACCOUNTS[0],
   bearerToken: string,
   limit: number
-): Promise<{ airdrops?: Partial<Airdrop>[]; error?: string } | null> {
+): Promise<{ airdrops?: Partial<Airdrop>[]; error?: string }> {
   try {
     const tweets = await fetchAccountTweets(account.username, bearerToken);
     const airdrops: Partial<Airdrop>[] = [];
@@ -100,34 +127,47 @@ async function fetchAndAnalyzeTweets(
       if (airdrops.length >= Math.ceil(limit / TWITTER_ACCOUNTS.length)) break;
     }
     
-    return { airdrops: airdrops };
+    return { airdrops };
   } catch (error) {
     return { error: `@${account.username}: ${error instanceof Error ? error.message : 'Unknown error'}` };
   }
 }
 
 async function fetchAccountTweets(username: string, bearerToken: string): Promise<Tweet[]> {
-  // Get user ID
+  // Get user ID with rate limit handling
   const userResponse = await fetchWithRetry(
     `https://api.twitter.com/2/users/by/username/${username}`,
     { headers: { "Authorization": `Bearer ${bearerToken}` } }
   );
-  if (!userResponse.ok) return [];
+  
+  if (!userResponse.ok) {
+    if (userResponse.status === 429) {
+      throw new Error("Rate limited");
+    }
+    return [];
+  }
   
   const user = await userResponse.json();
-  const userId = user.data.id;
+  const userId = user.data?.id;
+  if (!userId) return [];
   
   // Get tweets
   const tweetsResponse = await fetchWithRetry(
     `https://api.twitter.com/2/users/${userId}/tweets?max_results=15&tweet.fields=created_at,public_metrics,entities`,
     { headers: { "Authorization": `Bearer ${bearerToken}` } }
   );
+  
   if (!tweetsResponse.ok) return [];
   
   const tweets = await tweetsResponse.json();
   return (tweets.data || []).map((tweet: any) => ({
-    id: tweet.id, text: tweet.text, author_id: tweet.author_id, created_at: tweet.created_at,
-    public_metrics: tweet.public_metrics, entities: tweet.entities, source_account: username,
+    id: tweet.id,
+    text: sanitizeInput(tweet.text),
+    author_id: tweet.author_id,
+    created_at: tweet.created_at,
+    public_metrics: tweet.public_metrics,
+    entities: tweet.entities,
+    source_account: username,
   }));
 }
 
@@ -138,19 +178,11 @@ function analyzeTweetForAirdrop(tweet: Tweet): { score: number; keywords: string
   let score = 0;
   
   // High-signal phrases
-  for (const phrase of HIGH_SIGNAL_PHRASES) {
+  for (const [phrase, weight] of Object.entries(KEYWORD_WEIGHTS)) {
     if (text.includes(phrase)) {
       foundKeywords.push(phrase);
-      score += 0.4;
-      signals.push("high_signal");
-    }
-  }
-  
-  // Airdrop keywords
-  for (const keyword of AIRDROP_PHRASES) {
-    if (text.includes(keyword) && !foundKeywords.includes(keyword)) {
-      foundKeywords.push(keyword);
-      score += ["airdrop", "claim", "eligibility"].includes(keyword) ? 0.2 : 0.1;
+      score += weight;
+      if (weight >= 0.9) signals.push("high_signal");
     }
   }
   
@@ -178,7 +210,7 @@ function analyzeTweetForAirdrop(tweet: Tweet): { score: number; keywords: string
     }
   }
   
-  // Engagement score
+  // Engagement scoring
   const engagement = tweet.public_metrics.like_count + tweet.public_metrics.retweet_count * 2;
   if (engagement > 1000) score += 0.15;
   else if (engagement > 100) score += 0.05;
@@ -223,7 +255,7 @@ function extractAirdropFromTweet(
   return {
     name: account.name,
     symbol: deriveSymbol(account.name),
-    description: truncateText(tweet.text, 280),
+    description: sanitizeAndTruncate(tweet.text, 280),
     twitter: `https://twitter.com/${account.username}`,
     website: claimUrl || `https://twitter.com/${account.username}`,
     categories,
@@ -243,7 +275,70 @@ function extractAirdropFromTweet(
     discoveredAt: new Date(),
     createdAt: new Date(),
     updatedAt: new Date(),
+    // Include engagement score for sorting
+    ...(analysis as any),
   };
+}
+
+// Utility functions
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
+async function fetchWithRetry(url: string, options: RequestInit, retryCount = 0): Promise<Response> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CONFIG.TIMEOUT);
+    
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(timeoutId);
+    
+    if (response.ok) return response;
+    
+    // Handle rate limiting
+    if (response.status === 429) {
+      if (retryCount < CONFIG.MAX_RETRIES) {
+        const delay = CONFIG.RATE_LIMIT_BACKOFF * Math.pow(2, retryCount);
+        console.log(`[Twitter] Rate limited, waiting ${delay}ms`);
+        await sleep(delay);
+        return fetchWithRetry(url, options, retryCount + 1);
+      }
+      throw new Error("Rate limit exceeded");
+    }
+    
+    return response;
+  } catch (error) {
+    if (retryCount < CONFIG.MAX_RETRIES && !(error instanceof Error && error.message.includes("Rate limit"))) {
+      const delay = 1000 * Math.pow(2, retryCount);
+      await sleep(delay);
+      return fetchWithRetry(url, options, retryCount + 1);
+    }
+    throw error;
+  }
+}
+
+// Security functions
+function sanitizeInput(input: string): string {
+  return input
+    .replace(/[<>]/g, '')
+    .replace(/javascript:/gi, '')
+    .replace(/on\w+=/gi, '')
+    .replace(/&#\d+;/g, '')
+    .trim();
+}
+
+function sanitizeAndTruncate(text: string, maxLength: number): string {
+  const sanitized = sanitizeInput(text);
+  if (sanitized.length <= maxLength) return sanitized;
+  return sanitized.slice(0, maxLength).trim() + "...";
 }
 
 function estimateValue(category: string, score: number, engagement: number): number | undefined {
@@ -275,23 +370,4 @@ function deriveSymbol(name: string): string {
     "Phantom": "PHM", "Magic Eden": "ME",
   };
   return symbols[name] || name.slice(0, 4).toUpperCase();
-}
-
-function truncateText(text: string, maxLength: number): string {
-  return text.length <= maxLength ? text : text.slice(0, maxLength).trim() + "...";
-}
-
-async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3): Promise<Response> {
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      const response = await fetch(url, options);
-      if (response.ok) return response;
-      if (response.status === 429) {
-        await new Promise(resolve => setTimeout(resolve, 2000 * (i + 1)));
-        continue;
-      }
-      return response;
-    } catch {}
-  }
-  throw new Error('Fetch failed');
 }
