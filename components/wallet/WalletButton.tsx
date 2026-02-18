@@ -1,26 +1,20 @@
 "use client";
 
-import { WalletMultiButton as SolanaWalletButton } from "@solana/wallet-adapter-react-ui";
-import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
+
+// Dynamically import wallet button with no SSR to prevent hydration issues
+const WalletMultiButtonDynamic = dynamic(
+  async () => (await import("@solana/wallet-adapter-react-ui")).WalletMultiButton,
+  { 
+    ssr: false,
+    loading: () => (
+      <div className="inline-flex items-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground animate-pulse">
+        Connect Wallet
+      </div>
+    )
+  }
+);
 
 export function WalletButton() {
-  const [isClient, setIsClient] = useState(false);
-
-  useEffect(() => {
-    setIsClient(true);
-  }, []);
-
-  if (!isClient) {
-    // Return a placeholder with same dimensions to prevent layout shift
-    return (
-      <div 
-        className="inline-flex items-center rounded-lg bg-primary px-4 py-2 text-sm font-medium"
-        style={{ width: '120px', height: '40px', opacity: 0 }}
-      >
-        <span>Wallet</span>
-      </div>
-    );
-  }
-
-  return <SolanaWalletButton />;
+  return <WalletMultiButtonDynamic />;
 }

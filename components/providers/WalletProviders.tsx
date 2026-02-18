@@ -5,7 +5,7 @@ import { ConnectionProvider, WalletProvider } from "@solana/wallet-adapter-react
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import { PhantomWalletAdapter, SolflareWalletAdapter } from "@solana/wallet-adapter-wallets";
 import { clusterApiUrl } from "@solana/web3.js";
-import { ReactNode, useMemo, useState } from "react";
+import { ReactNode, useMemo } from "react";
 
 // Import wallet adapter styles
 import "@solana/wallet-adapter-react-ui/styles.css";
@@ -15,29 +15,19 @@ interface WalletProvidersProps {
 }
 
 export function WalletProviders({ children }: WalletProvidersProps) {
-  const [isClient, setIsClient] = useState(false);
-  
-  // Ensure we're on the client side before rendering wallet providers
-  useMemo(() => setIsClient(true), []);
-  
   const network = WalletAdapterNetwork.Mainnet;
-  const endpoint = useMemo(() => clusterApiUrl(network), [network]);
-  
-  // Initialize wallets only on client side
-  const wallets = useMemo(
-    () => {
-      if (!isClient) return [];
-      return [
-        new PhantomWalletAdapter(),
-        new SolflareWalletAdapter(),
-      ];
-    },
-    [isClient, network]
-  );
+  // Use dedicated RPC for better performance (fallback to public)
+  const endpoint = useMemo(() => {
+    return process.env.NEXT_PUBLIC_SOLANA_RPC_URL || clusterApiUrl(network);
+  }, [network]);
 
-  if (!isClient) {
-    return <>{children}</>;
-  }
+  const wallets = useMemo(
+    () => [
+      new PhantomWalletAdapter(),
+      new SolflareWalletAdapter(),
+    ],
+    [network]
+  );
 
   return (
     <ConnectionProvider endpoint={endpoint}>
