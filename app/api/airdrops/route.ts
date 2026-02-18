@@ -3,10 +3,10 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { rateLimit } from "@/lib/middleware/rate-limit";
-import { withValidation, sanitizeString } from "@/lib/middleware/validation";
-import { getAirdropsByFilters, getLiveAirdrops, getFeaturedAirdrops } from "@/lib/data/airdrop-store";
+import { getAirdropsByFilters, getLiveAirdrops, getAllAirdrops, deleteAirdrop } from "@/lib/data/airdrop-store";
 import { AirdropFilters, AirdropStatus } from "@/lib/types/airdrop";
 
+// GET - List airdrops
 export async function GET(request: NextRequest) {
   // Apply rate limiting
   const rateLimitResponse = rateLimit(request);
@@ -29,7 +29,14 @@ export async function GET(request: NextRequest) {
       filters.status = "live";
     }
     
-    const airdrops = await getAirdropsByFilters(filters);
+    let airdrops = await getAirdropsByFilters(filters);
+    
+    // Filter by recency - only show airdrops discovered in last 90 days
+    const ninetyDaysAgo = Date.now() - (90 * 24 * 60 * 60 * 1000);
+    airdrops = airdrops.filter(a => new Date(a.discoveredAt).getTime() > ninetyDaysAgo);
+    
+    // Sort by discovered date (newest first)
+    airdrops.sort((a, b) => new Date(b.discoveredAt).getTime() - new Date(a.discoveredAt).getTime());
     
     // Return sanitized data (exclude rules which are server-side only)
     const sanitizedAirdrops = airdrops.map(({ rules, ...airdrop }) => ({
@@ -39,7 +46,6 @@ export async function GET(request: NextRequest) {
       description: airdrop.description,
       website: airdrop.website,
       twitter: airdrop.twitter,
-      blog: airdrop.blog,
       discord: airdrop.discord,
       telegram: airdrop.telegram,
       claimUrl: airdrop.claimUrl,
@@ -56,6 +62,8 @@ export async function GET(request: NextRequest) {
       verified: airdrop.verified,
       featured: airdrop.featured,
       status: airdrop.status,
+      chains: airdrop.chains,
+      primaryChain: airdrop.primaryChain,
       communityScore: airdrop.communityScore,
       upvotes: airdrop.upvotes,
       downvotes: airdrop.downvotes,
@@ -87,4 +95,55 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+// DELETE /api/airdrops/clear - Clear old airdrops (admin only)
+export async function DELETE(request: NextRequest) {
+  const authHeader = request.headers.get("authorization");
+  const adminToken = request.cookies.get("api_admin_token")?.value || process.env.ADMIN_TOKEN;
+  
+  if (adminToken && authHeader !== `Bearer ${adminToken}`) {
+    return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+  }
+  
+  try {
+    const searchParams = request.nextUrl.searchParams;
+    const clearOld = searchParams.get("old") === "true";
+    const clearAll = searchParams.get("all") === "true";
+    
+    const allAirdrops = await getAllAirdrops();
+    let deletedCount = 0;
+    
+    if (clearAll) {
+      // Delete everything
+      for (const airdrop of allAirdrops) {
+        await deleteAirdrop(airdrop.id);
+        deletedCount++;
+      }
+    } else if (clearOld) {
+      // Delete old featured airdrops and anything older than 90 days
+      const ninetyDaysAgo = Date.now() - (90 * 24 * 60 * 60 * 1000);
+      for (const airdrop of allAirdrops) {
+        if (airdrop.featured || new Date(airdrop.discoveredAt).getTime() < ninetyDaysAgo) {
+          await deleteAirdrop(airdrop.id);
+          deletedCount++;
+        }
+      }
+    }
+    
+    return NextResponse.json({
+      success: true,
+      message: `Deleted ${deletedCount} airdrops`,
+      deletedCount,
+    });
+  } catch (error) {
+    return NextResponse.json(
+      { success: false, error: "Failed to clear airdrops" },
+      { status: 500 }
+    );
+  }
+}
+
+function sanitizeString(input: string): string {
+  return input.replace(/[<>]/g, '').trim();
 }

@@ -6,7 +6,7 @@ import { AirdropCard } from "@/components/airdrop/AirdropCard";
 import { CategoryFilter } from "@/components/airdrop/CategoryFilter";
 import { WalletScannerComponent } from "@/components/airdrop/WalletScanner";
 import { Airdrop, AirdropCategory, EligibilityResult } from "@/lib/types/airdrop";
-import { Coins, ArrowRight, Sparkles, Shield, Wallet, Loader2, RefreshCw, Search, CheckCircle2, AlertCircle, Clock, Zap, Globe } from "lucide-react";
+import { Coins, ArrowRight, Sparkles, Shield, Wallet, Loader2, RefreshCw, Search, CheckCircle2, AlertCircle, Clock, Zap, Globe, Trash2, ExternalLink } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { ClaimAllModal } from "@/components/airdrop/ClaimAllModal";
 import { getApiSettings, hasApiSettings } from "@/lib/utils/cookies";
@@ -55,6 +55,7 @@ export default function Home() {
   const [showClaimModal, setShowClaimModal] = useState(false);
   const [lastScanTime, setLastScanTime] = useState<Date | null>(null);
   const [lastScanResults, setLastScanResults] = useState<{ new: number; enriched: number; filtered: number } | null>(null);
+  const [showScanDetails, setShowScanDetails] = useState(false);
   const { connected } = useWallet();
   const apiSettings = hasApiSettings();
   const scanStartTime = useRef<number>(0);
@@ -67,11 +68,17 @@ export default function Home() {
   const fetchAirdrops = async () => {
     try {
       setLoading(true);
-      const response = await fetch("/api/airdrops?status=live");
+      const response = await fetch("/api/airdrops");
       const data = await response.json();
       const allAirdrops = data.data || [];
       setAirdrops(allAirdrops);
-      setFeaturedAirdrops(allAirdrops.filter((a: ApiAirdrop) => a.featured && a.verified).slice(0, 6));
+      
+      // Only show recently discovered airdrops as featured (last 7 days)
+      const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+      const recentFeatured = allAirdrops.filter((a: ApiAirdrop) => 
+        a.verified && new Date(a.discoveredAt).getTime() > sevenDaysAgo
+      ).slice(0, 6);
+      setFeaturedAirdrops(recentFeatured);
       
       const counts = new Map<AirdropCategory, number>();
       const categories: AirdropCategory[] = ["DeFi", "NFTs", "Gaming", "Governance", "Bridges", "Testnets", "Social", "Infrastructure", "Liquid Staking", "DEX", "Lending", "Perpetuals", "Oracle", "Wallet", "Layer 2", "Restaking"];
@@ -98,15 +105,16 @@ export default function Home() {
       const useAI = !!settings.geminiApiKey;
       
       // Start progress simulation
-      const totalEstimatedTime = 45000; // 45 seconds estimated total
+      const totalEstimatedTime = 60000; // 60 seconds for comprehensive scan
       const stages = [
         { name: 'Initializing scanner...', percent: 5 },
-        { name: 'Scanning GitHub repositories...', percent: 35 },
-        { name: 'Scanning protocol blogs (RSS)...', percent: 55 },
-        { name: 'Scanning Twitter announcements...', percent: 70 },
-        { name: 'AI enrichment with Gemini...', percent: 85 },
-        { name: 'Filtering ongoing airdrops...', percent: 95 },
-        { name: 'Complete!', percent: 100 },
+        { name: 'Scanning GitHub repositories...', percent: 25 },
+        { name: 'Scanning protocol blogs (RSS)...', percent: 40 },
+        { name: 'Scanning Twitter announcements...', percent: 55 },
+        { name: 'Searching web for airdrops...', percent: 70 },
+        { name: 'Scanning Reddit giveaways...', percent: 85 },
+        { name: 'AI enrichment with Gemini...', percent: 95 },
+        { name: 'Filtering ongoing airdrops...', percent: 100 },
       ];
       
       let stageIndex = 0;
@@ -132,7 +140,11 @@ export default function Home() {
       const response = await fetch("/api/scraper/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sources: ["github", "rss", "twitter"], limit: 150, useAI }),
+        body: JSON.stringify({ 
+          sources: ["github", "rss", "twitter", "web-search", "reddit"], 
+          limit: 200, 
+          useAI 
+        }),
       });
       
       const result = await response.json();
@@ -149,12 +161,13 @@ export default function Home() {
           enriched: result.data.enrichedWithAI || 0,
           filtered: result.data.filteredOut || 0,
         });
+        setShowScanDetails(true);
         await fetchAirdrops();
         
         setTimeout(() => {
           setScanning(false);
           setScanProgress(null);
-        }, 4000);
+        }, 5000);
       } else {
         throw new Error(result.error || "Scan failed");
       }
@@ -164,6 +177,21 @@ export default function Home() {
       setScanning(false);
       setScanProgress(null);
       alert(`Scan failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+    }
+  };
+
+  const clearOldAirdrops = async () => {
+    if (!confirm("This will delete old featured airdrops and anything older than 90 days. Continue?")) return;
+    
+    try {
+      const response = await fetch("/api/airdrops?old=true", { method: "DELETE" });
+      const result = await response.json();
+      if (result.success) {
+        alert(`Cleared ${result.deletedCount} old airdrops`);
+        await fetchAirdrops();
+      }
+    } catch (error) {
+      alert("Failed to clear airdrops");
     }
   };
 
@@ -200,7 +228,7 @@ export default function Home() {
             </h1>
             
             <p className="mt-6 text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto">
-              Scan Ethereum, Solana, Base, Arbitrum, and 10+ more chains for ongoing airdrops.
+              Scan 15+ chains, Reddit giveaways, and the entire web for ongoing airdrops.
               AI verifies claims and filters out ended airdrops.
             </p>
             
@@ -224,38 +252,65 @@ export default function Home() {
                     <span className="inline-flex items-center text-primary"><Clock className="h-3 w-3 mr-1" />ETA: {scanProgress.etaSeconds}s</span>
                   )}
                 </div>
-                {scanProgress.currentItem && <p className="mt-2 text-xs text-muted-foreground truncate">Processing: {scanProgress.currentItem}</p>}
               </motion.div>
             )}
             
             {/* Scan Results */}
             {lastScanResults && !scanning && (
-              <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="mt-8 grid grid-cols-3 gap-4 max-w-2xl mx-auto">
-                <div className="rounded-lg bg-green-100 dark:bg-green-900/20 p-4 text-center">
-                  <CheckCircle2 className="h-6 w-6 text-green-600 mx-auto mb-1" />
-                  <p className="text-2xl font-bold text-green-700 dark:text-green-400">{lastScanResults.new}</p>
-                  <p className="text-xs text-green-600 dark:text-green-400">New Airdrops</p>
+              <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="mt-8">
+                <div className="grid grid-cols-3 gap-4 max-w-2xl mx-auto mb-4">
+                  <div className="rounded-lg bg-green-100 dark:bg-green-900/20 p-4 text-center">
+                    <CheckCircle2 className="h-6 w-6 text-green-600 mx-auto mb-1" />
+                    <p className="text-2xl font-bold text-green-700 dark:text-green-400">{lastScanResults.new}</p>
+                    <p className="text-xs text-green-600 dark:text-green-400">New Airdrops</p>
+                  </div>
+                  <div className="rounded-lg bg-blue-100 dark:bg-blue-900/20 p-4 text-center">
+                    <Zap className="h-6 w-6 text-blue-600 mx-auto mb-1" />
+                    <p className="text-2xl font-bold text-blue-700 dark:text-blue-400">{lastScanResults.enriched}</p>
+                    <p className="text-xs text-blue-600 dark:text-blue-400">AI Enriched</p>
+                  </div>
+                  <div className="rounded-lg bg-gray-100 dark:bg-gray-900/20 p-4 text-center">
+                    <AlertCircle className="h-6 w-6 text-gray-600 mx-auto mb-1" />
+                    <p className="text-2xl font-bold text-gray-700 dark:text-gray-400">{lastScanResults.filtered}</p>
+                    <p className="text-xs text-gray-600 dark:text-gray-400">Filtered (Ended)</p>
+                  </div>
                 </div>
-                <div className="rounded-lg bg-blue-100 dark:bg-blue-900/20 p-4 text-center">
-                  <Zap className="h-6 w-6 text-blue-600 mx-auto mb-1" />
-                  <p className="text-2xl font-bold text-blue-700 dark:text-blue-400">{lastScanResults.enriched}</p>
-                  <p className="text-xs text-blue-600 dark:text-blue-400">AI Enriched</p>
-                </div>
-                <div className="rounded-lg bg-gray-100 dark:bg-gray-900/20 p-4 text-center">
-                  <AlertCircle className="h-6 w-6 text-gray-600 mx-auto mb-1" />
-                  <p className="text-2xl font-bold text-gray-700 dark:text-gray-400">{lastScanResults.filtered}</p>
-                  <p className="text-xs text-gray-600 dark:text-gray-400">Filtered (Ended)</p>
-                </div>
+                
+                {/* View Details Button */}
+                <button 
+                  onClick={() => setShowScanDetails(!showScanDetails)}
+                  className="inline-flex items-center text-sm text-primary hover:underline"
+                >
+                  {showScanDetails ? "Hide" : "View"} scan details
+                </button>
+                
+                {showScanDetails && lastScanTime && (
+                  <div className="mt-4 p-4 rounded-lg bg-muted text-sm">
+                    <p className="text-muted-foreground">Scan completed at: {lastScanTime.toLocaleString()}</p>
+                    <p className="text-muted-foreground mt-2">
+                      Sources scanned: GitHub, RSS, Twitter, Web Search, Reddit
+                    </p>
+                    <button 
+                      onClick={clearOldAirdrops}
+                      className="mt-4 inline-flex items-center text-xs text-red-600 hover:underline"
+                    >
+                      <Trash2 className="h-3 w-3 mr-1" />
+                      Clear old featured airdrops
+                    </button>
+                  </div>
+                )}
               </motion.div>
             )}
             
-            {lastScanTime && !scanning && <p className="mt-6 text-sm text-muted-foreground">Last scan: {lastScanTime.toLocaleString()}</p>}
+            {lastScanTime && !scanning && !showScanDetails && (
+              <p className="mt-6 text-sm text-muted-foreground">Last scan: {lastScanTime.toLocaleString()}</p>
+            )}
             
             {!apiSettings.all && (
               <Link href="/settings">
                 <div className="mt-6 inline-flex items-center rounded-lg bg-yellow-100 dark:bg-yellow-900/20 px-4 py-2 text-sm text-yellow-800 dark:text-yellow-200 hover:bg-yellow-200 dark:hover:bg-yellow-900/40 transition-colors">
                   <AlertCircle className="mr-2 h-4 w-4" />
-                  Configure API keys for better results →
+                  Configure API keys for better results <ExternalLink className="ml-1 h-3 w-3" />
                 </div>
               </Link>
             )}
@@ -270,11 +325,11 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Featured Airdrops */}
+      {/* Featured Airdrops - Only recent ones */}
       <section className="py-20">
         <div className="container mx-auto px-4">
           <motion.div initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} className="flex items-center justify-between mb-8">
-            <h2 className="text-3xl font-bold">Featured Airdrops</h2>
+            <h2 className="text-3xl font-bold">Recent Featured Airdrops</h2>
             <button onClick={fetchAirdrops} className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"><RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
           </motion.div>
           
@@ -282,7 +337,7 @@ export default function Home() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {featuredAirdrops.map((airdrop) => (<AirdropCard key={airdrop.id} airdrop={{...airdrop, live: airdrop.status === "live" || airdrop.status === "unverified", createdAt: new Date(airdrop.createdAt), updatedAt: new Date(airdrop.updatedAt), source: { type: "github" as const, url: airdrop.website }}} eligible={getEligibility(airdrop.id)} />))}
             </div>
-          ) : (<div className="text-center py-12 text-muted-foreground"><p>No featured airdrops yet. Run a scan to discover new opportunities!</p></div>)}
+          ) : (<div className="text-center py-12 text-muted-foreground"><p>No recent featured airdrops.</p><p className="text-sm mt-2">Run a scan to discover new opportunities!</p></div>)}
         </div>
       </section>
 
@@ -319,9 +374,9 @@ export default function Home() {
         <div className="container mx-auto px-4 text-center">
           <motion.div initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}>
             <h2 className="text-3xl md:text-4xl font-bold text-white">Ready to Find More Airdrops?</h2>
-            <p className="mt-4 text-lg text-white/80 max-w-2xl mx-auto">Scan 15+ chains for the latest ongoing airdrop opportunities.</p>
+            <p className="mt-4 text-lg text-white/80 max-w-2xl mx-auto">Scan 15+ chains, Reddit, and the entire web for opportunities.</p>
             <button onClick={runScanner} disabled={scanning} className="mt-8 inline-flex items-center rounded-lg bg-white px-8 py-4 text-base font-medium text-primary hover:bg-white/90 transition-colors disabled:opacity-50">
-              {scanning ? (<><Loader2 className="mr-2 h-5 w-5 animate-spin" />Scanning...</>) : (<><Search className="mr-2 h-5 w-5" />Scan All Chains</>)}
+              {scanning ? (<><Loader2 className="mr-2 h-5 w-5 animate-spin" />Scanning...</>) : (<><Search className="mr-2 h-5 w-5" />Scan All Sources</>)}
             </button>
           </motion.div>
         </div>
