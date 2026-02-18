@@ -1,15 +1,15 @@
-// Comprehensive Web Search Scraper - Searches Google, Bing for airdrop announcements
-// Uses search APIs and web scraping to find airdrops from across the entire internet
+// Enhanced Web Search Scraper - More aggressive search for airdrops
+// Searches Google, CryptoPanic, and multiple sources
 
 import { DiscoveryResult, Airdrop } from "@/lib/types/airdrop";
 
 const CONFIG = {
   TIMEOUT: 15000,
   MAX_RETRIES: 2,
-  DELAY_BETWEEN_SEARCHES: 2000,
+  DELAY_BETWEEN_SEARCHES: 1000,
 };
 
-// Search queries that find airdrop announcements
+// More aggressive search queries
 const SEARCH_QUERIES = [
   "solana airdrop claim 2025",
   "ethereum airdrop eligibility",
@@ -30,24 +30,35 @@ const SEARCH_QUERIES = [
   "scroll airdrop points",
   "sui airdrop claim",
   "aptos airdrop rewards",
+  "cosmos airdrop 2025",
+  "polkadot airdrop claim",
+  "avalanche airdrop",
+  "polygon airdrop",
+  "bnb airdrop",
+  "crypto giveaway drop address",
+  "free crypto airdrop",
+  "airdrop comment your address",
+  "reddit crypto giveaway",
 ];
 
-// Airdrop aggregator sites to monitor
+// Airdrop aggregator sites
 const AIRDROP_AGGREGATORS = [
   { name: "Airdrops.io", url: "https://airdrops.io", type: "aggregator" },
   { name: "Airdrop Alert", url: "https://airdropalert.com", type: "aggregator" },
   { name: "CoinMarketCap Airdrops", url: "https://coinmarketcap.com/airdrop", type: "aggregator" },
   { name: "CoinGecko Airdrops", url: "https://coingecko.com/airdrops", type: "aggregator" },
   { name: "DefiLlama Airdrops", url: "https://defillama.com/airdrops", type: "aggregator" },
+  { name: "99Airdrops", url: "https://99airdrops.com", type: "aggregator" },
 ];
 
-// Crypto news sites
+// Crypto news sites with RSS
 const CRYPTO_NEWS_SITES = [
-  { name: "CoinDesk", url: "https://coindesk.com", search: "airdrop" },
-  { name: "Cointelegraph", url: "https://cointelegraph.com", search: "airdrop" },
-  { name: "The Block", url: "https://theblock.co", search: "airdrop" },
-  { name: "Decrypt", url: "https://decrypt.co", search: "airdrop" },
-  { name: "Blockworks", url: "https://blockworks.co", search: "airdrop" },
+  { name: "CoinDesk", rss: "https://coindesk.com/arc/outboundfeeds/rss/" },
+  { name: "Cointelegraph", rss: "https://cointelegraph.com/rss" },
+  { name: "The Block", rss: "https://theblock.co/rss.xml" },
+  { name: "Decrypt", rss: "https://decrypt.co/feed" },
+  { name: "Blockworks", rss: "https://blockworks.co/news/feed" },
+  { name: "CryptoSlate", rss: "https://cryptoslate.com/feed/" },
 ];
 
 export interface SearchResult {
@@ -60,7 +71,8 @@ export interface SearchResult {
 
 export async function scrapeWebSearch(options?: { 
   limit?: number;
-  searchApiKey?: string; // Google Custom Search API or similar
+  searchApiKey?: string;
+  onProgress?: (current: number, total: number, source: string) => void;
 }): Promise<DiscoveryResult> {
   const results: Partial<Airdrop>[] = [];
   const errors: string[] = [];
@@ -68,53 +80,76 @@ export async function scrapeWebSearch(options?: {
   
   console.log(`[Web Search Scraper] Starting comprehensive web search`);
   
+  let totalSources = SEARCH_QUERIES.length + AIRDROP_AGGREGATORS.length + CRYPTO_NEWS_SITES.length;
+  let completedSources = 0;
+  
   // Search using multiple queries
-  for (const query of SEARCH_QUERIES.slice(0, 10)) {
+  for (const query of SEARCH_QUERIES.slice(0, 15)) {
     try {
+      if (options?.onProgress) {
+        options.onProgress(completedSources, totalSources, `Search: ${query.slice(0, 30)}...`);
+      }
+      
       await sleep(CONFIG.DELAY_BETWEEN_SEARCHES);
       
       const searchResults = await performWebSearch(query, options?.searchApiKey);
       
-      for (const result of searchResults) {
+      for (const result of searchResults.slice(0, 5)) {
         const analysis = analyzeSearchResult(result);
-        if (analysis && analysis.score >= 0.5) {
+        if (analysis && analysis.score >= 0.45) {
           results.push(createAirdropFromSearchResult(result, analysis));
         }
-        if (results.length >= limit) break;
       }
+      
+      completedSources++;
       
       if (results.length >= limit) break;
     } catch (error) {
       errors.push(`Search "${query}": ${error instanceof Error ? error.message : 'Unknown'}`);
+      completedSources++;
     }
   }
   
   // Scrape airdrop aggregator sites
   for (const aggregator of AIRDROP_AGGREGATORS) {
     try {
-      await sleep(1000);
+      if (options?.onProgress) {
+        options.onProgress(completedSources, totalSources, aggregator.name);
+      }
+      
+      await sleep(500);
       const aggregatorResults = await scrapeAirdropAggregator(aggregator);
       results.push(...aggregatorResults);
+      completedSources++;
     } catch (error) {
       errors.push(`${aggregator.name}: ${error instanceof Error ? error.message : 'Unknown'}`);
+      completedSources++;
     }
     if (results.length >= limit) break;
   }
   
-  // Scrape crypto news sites
+  // Scrape crypto news RSS feeds
   for (const newsSite of CRYPTO_NEWS_SITES) {
     try {
-      await sleep(1000);
-      const newsResults = await scrapeCryptoNews(newsSite);
+      if (options?.onProgress) {
+        options.onProgress(completedSources, totalSources, newsSite.name);
+      }
+      
+      await sleep(500);
+      const newsResults = await scrapeCryptoNewsRSS(newsSite);
       results.push(...newsResults);
+      completedSources++;
     } catch (error) {
       errors.push(`${newsSite.name}: ${error instanceof Error ? error.message : 'Unknown'}`);
+      completedSources++;
     }
     if (results.length >= limit) break;
   }
   
   // Sort by confidence and recency
   results.sort((a, b) => (b as any).score - (a as any).score);
+  
+  console.log(`[Web Search Scraper] Found ${results.length} potential airdrops`);
   
   return {
     success: results.length > 0,
@@ -126,13 +161,12 @@ export async function scrapeWebSearch(options?: {
 }
 
 async function performWebSearch(query: string, apiKey?: string): Promise<SearchResult[]> {
-  // Use Google Custom Search API if key provided, otherwise use alternative
   if (apiKey) {
     return searchWithGoogleAPI(query, apiKey);
   }
   
-  // Fallback: Use public search endpoints or RSS
-  return searchWithFallback(query);
+  // Fallback: Use CryptoPanic API (free, no auth needed for basic)
+  return searchWithCryptoPanic(query);
 }
 
 async function searchWithGoogleAPI(query: string, apiKey: string): Promise<SearchResult[]> {
@@ -154,18 +188,19 @@ async function searchWithGoogleAPI(query: string, apiKey: string): Promise<Searc
   }
 }
 
-async function searchWithFallback(query: string): Promise<SearchResult[]> {
-  // Alternative: Use RSS feeds from crypto news sites with search
-  const rssSearches = [
-    `https://cryptopanic.com/api/posts/?auth_token=demo&filter=hot`,
-  ];
+async function searchWithCryptoPanic(query: string): Promise<SearchResult[]> {
+  // CryptoPanic has a free API
+  const url = `https://cryptopanic.com/api/v1/posts/?auth_token=demo&filter=hot&kind=news`;
   
   try {
-    const response = await fetchWithRetry(rssSearches[0]);
+    const response = await fetchWithRetry(url);
     const data = await response.json();
     
     return (data.results || [])
-      .filter((item: any) => item.title.toLowerCase().includes('airdrop'))
+      .filter((item: any) => {
+        const text = `${item.title} ${item.body}`.toLowerCase();
+        return text.includes('airdrop') || text.includes('giveaway') || text.includes('claim');
+      })
       .map((item: any) => ({
         title: item.title,
         url: item.url,
@@ -179,47 +214,29 @@ async function searchWithFallback(query: string): Promise<SearchResult[]> {
 }
 
 async function scrapeAirdropAggregator(aggregator: typeof AIRDROP_AGGREGATORS[0]): Promise<Partial<Airdrop>[]> {
-  // These sites often have APIs or RSS feeds
   const results: Partial<Airdrop>[] = [];
   
+  // These sites often have public data we can reference
+  // In production, you'd actually scrape these sites
   try {
-    // For demo, we'll create placeholder entries
-    // In production, you'd actually scrape these sites
-    if (aggregator.name.includes('CoinMarketCap')) {
-      // CoinMarketCap has a public airdrop page
-      const response = await fetchWithRetry('https://api.coinmarketcap.com/data/v1/airdrop/');
-      if (response.ok) {
-        const data = await response.json();
-        // Process CMC airdrop data
-      }
-    }
+    // For demo purposes, return placeholder
+    // Real implementation would fetch and parse their HTML/APIs
   } catch {}
   
   return results;
 }
 
-async function scrapeCryptoNews(newsSite: typeof CRYPTO_NEWS_SITES[0]): Promise<Partial<Airdrop>[]> {
+async function scrapeCryptoNewsRSS(newsSite: { name: string; rss: string }): Promise<Partial<Airdrop>[]> {
   const results: Partial<Airdrop>[] = [];
   
   try {
-    // Most news sites have RSS feeds
-    const rssUrls: Record<string, string> = {
-      'CoinDesk': 'https://coindesk.com/arc/outboundfeeds/rss/',
-      'Cointelegraph': 'https://cointelegraph.com/rss',
-      'The Block': 'https://theblock.co/rss.xml',
-      'Decrypt': 'https://decrypt.co/feed',
-      'Blockworks': 'https://blockworks.co/news/feed',
-    };
-    
-    const rssUrl = rssUrls[newsSite.name];
-    if (!rssUrl) return results;
-    
-    const response = await fetchWithRetry(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(rssUrl)}`);
+    const response = await fetchWithRetry(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(newsSite.rss)}`);
     const data = await response.json();
     
     if (data.status === 'ok') {
-      for (const item of data.items.slice(0, 10)) {
-        if (item.title.toLowerCase().includes('airdrop') || item.description?.toLowerCase().includes('airdrop')) {
+      for (const item of data.items.slice(0, 15)) {
+        const text = `${item.title} ${item.description}`.toLowerCase();
+        if (text.includes('airdrop') || text.includes('giveaway') || text.includes('token launch') || text.includes('claim')) {
           results.push({
             name: extractProjectName(item.title),
             symbol: deriveSymbol(item.title),
@@ -235,7 +252,7 @@ async function scrapeCryptoNews(newsSite: typeof CRYPTO_NEWS_SITES[0]): Promise<
               type: 'rss' as const,
               url: item.link,
               fetchedAt: new Date(),
-              confidence: 0.6,
+              confidence: 0.55,
             }],
             discoveredAt: new Date(),
             createdAt: new Date(),
@@ -258,7 +275,7 @@ function analyzeSearchResult(result: SearchResult): { score: number; keywords: s
   const keywords: Record<string, number> = {
     'airdrop': 1.0, 'claim': 0.8, 'eligibility': 0.7, 'snapshot': 0.8,
     'token distribution': 0.9, 'retroactive': 0.9, 'live': 0.6,
-    'announced': 0.5, 'rewards': 0.6, 'points': 0.5,
+    'announced': 0.5, 'rewards': 0.6, 'points': 0.5, 'giveaway': 0.9,
   };
   
   for (const [kw, weight] of Object.entries(keywords)) {
@@ -272,19 +289,20 @@ function analyzeSearchResult(result: SearchResult): { score: number; keywords: s
   // Recency bonus
   if (result.publishedAt) {
     const daysOld = (Date.now() - result.publishedAt.getTime()) / (1000 * 60 * 60 * 24);
-    if (daysOld < 7) score += 0.2;
+    if (daysOld < 3) score += 0.3;
+    else if (daysOld < 7) score += 0.2;
     else if (daysOld < 30) score += 0.1;
     else if (daysOld > 180) score -= 0.3;
   }
   
   // Source bonus
-  const trustedSources = ['coindesk', 'cointelegraph', 'theblock', 'decrypt', 'coinmarketcap'];
+  const trustedSources = ['coindesk', 'cointelegraph', 'theblock', 'decrypt', 'coinmarketcap', 'coingecko'];
   if (trustedSources.some(s => result.source.toLowerCase().includes(s))) {
     score += 0.15;
     signals.push('trusted_source');
   }
   
-  score = Math.min(Math.max(score, 0), 1);
+  score = Math.min(Math.max(score, 0), 1.5);
   if (foundKeywords.length === 0) return null;
   
   return { score, keywords: foundKeywords, signals };
@@ -307,7 +325,7 @@ function createAirdropFromSearchResult(result: SearchResult, analysis: any): Par
       type: 'web-search' as const,
       url: result.url,
       fetchedAt: new Date(),
-      confidence: analysis.score,
+      confidence: Math.min(analysis.score, 1),
     }],
     discoveredAt: new Date(),
     createdAt: new Date(),

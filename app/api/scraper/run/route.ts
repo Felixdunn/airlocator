@@ -1,8 +1,8 @@
-// POST /api/scraper/run - Enhanced with Gemini AI and real-time progress
+// POST /api/scraper/run - Enhanced with better progress tracking and all sources
 // Uses Server-Sent Events for live progress updates
 
 import { NextRequest, NextResponse } from "next/server";
-import { rateLimit, strictRateLimit } from "@/lib/middleware/rate-limit";
+import { strictRateLimit } from "@/lib/middleware/rate-limit";
 import { runScraper } from "@/lib/scraper";
 import { getAllAirdrops, saveAirdrop } from "@/lib/data/airdrop-store";
 import { enrichAirdropWithGemini } from "@/lib/ai/gemini-enricher";
@@ -31,17 +31,22 @@ export async function POST(request: NextRequest) {
     const githubToken = request.cookies.get("api_github_token")?.value;
     const twitterBearerToken = request.cookies.get("api_twitter_token")?.value;
     const geminiApiKey = request.cookies.get("api_gemini_key")?.value;
+    const searchApiKey = request.cookies.get("api_google_search_key")?.value;
     
-    console.log(`[Scraper API] Starting scan with AI enrichment: ${!!useAI && !!geminiApiKey}`);
+    console.log(`[Scraper API] Starting comprehensive scan`);
+    console.log(`[Scraper API] Sources: ${sources?.join(', ') || 'all'}`);
+    console.log(`[Scraper API] AI enrichment: ${!!useAI && !!geminiApiKey}`);
     
-    // Run the scraper
+    // Run the scraper with progress callback
     const result = await runScraper({
-      sources: sources || ["github", "rss", "twitter"],
-      limit: limit || 100,
+      sources: sources || ["github", "rss", "twitter", "web-search", "reddit"],
+      limit: limit || 200,
       githubToken,
       twitterBearerToken,
-      onProgress: (stage, current, total) => {
-        console.log(`[Scraper API] Progress: ${stage} - ${current}/${total}`);
+      geminiApiKey: useAI ? geminiApiKey : undefined,
+      searchApiKey,
+      onProgress: (stage, percent, total, item) => {
+        console.log(`[Scraper API] ${stage} - ${percent}% (${item || ''})`);
       },
     });
     
@@ -56,8 +61,7 @@ export async function POST(request: NextRequest) {
           const enrichment = await enrichAirdropWithGemini(content, geminiApiKey);
           
           if (enrichment.success && enrichment.data) {
-            // Only keep ongoing airdrops
-            if (enrichment.data.isOngoing && enrichment.data.confidence > 0.6) {
+            if (enrichment.data.isOngoing && enrichment.data.confidence > 0.5) {
               airdrop.name = enrichment.data.name;
               airdrop.symbol = enrichment.data.symbol;
               airdrop.description = enrichment.data.description;
@@ -66,23 +70,21 @@ export async function POST(request: NextRequest) {
               airdrop.discord = enrichment.data.discord || undefined;
               airdrop.telegram = enrichment.data.telegram || undefined;
               airdrop.categories = enrichment.data.categories as any;
-              airdrop.verified = enrichment.data.confidence > 0.8;
+              airdrop.verified = enrichment.data.confidence > 0.7;
               enrichedCount++;
             } else {
-              // Mark as ended if AI determines it's not ongoing
               airdrop.status = "ended";
             }
           }
           
-          // Rate limiting between AI calls
-          await new Promise(resolve => setTimeout(resolve, 500));
+          await new Promise(resolve => setTimeout(resolve, 400));
         } catch (error) {
           console.error(`[Scraper API] AI enrichment failed for ${airdrop.name}:`, error);
         }
       }
     }
     
-    // Filter out ended/old airdrops
+    // Filter out ended airdrops
     const ongoingAirdrops = result.newAirdrops.filter(a => a.status !== "ended");
     
     // Save to store
@@ -111,11 +113,7 @@ export async function POST(request: NextRequest) {
         totalDiscovered: result.totalDiscovered,
         filteredOut: result.newAirdrops.length - ongoingAirdrops.length,
         errors: result.errors,
-        sources: {
-          github: result.sources.github?.airdrops.length || 0,
-          rss: result.sources.rss?.airdrops.length || 0,
-          twitter: result.sources.twitter?.airdrops.length || 0,
-        },
+        sources: result.sources,
       },
     });
   } catch (error) {
@@ -131,7 +129,7 @@ export async function POST(request: NextRequest) {
 export async function GET() {
   try {
     const allAirdrops = await getAllAirdrops();
-    const liveAirdrops = allAirdrops.filter(a => a.status === "live");
+    const liveAirdrops = allAirdrops.filter(a => a.status === "live" || a.status === "unverified");
     const verifiedAirdrops = allAirdrops.filter(a => a.verified);
     
     return NextResponse.json({
