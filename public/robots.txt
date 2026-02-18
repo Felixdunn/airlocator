@@ -1,0 +1,14 @@
+User-agent: *
+Allow: /
+
+# Sitemap
+Sitemap: https://solana-airdrop-tracker.vercel.app/sitemap.xml
+
+# Crawl-delay (optional, be nice to the server)
+Crawl-delay: 1
+
+# Block API routes
+Disallow: /api/
+
+# Block wallet adapter internal routes
+Disallow: /_next/
