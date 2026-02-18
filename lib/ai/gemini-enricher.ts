@@ -1,5 +1,5 @@
 // Gemini AI Integration for airdrop data enrichment
-// Uses Google's Gemini API to extract structured data from raw content
+// Simplified: extracts only title, short description, and website
 
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
@@ -11,10 +11,8 @@ export interface AirdropEnrichment {
   twitter?: string;
   discord?: string;
   telegram?: string;
-  categories: string[];
   isOngoing: boolean;
   confidence: number;
-  reasoning: string;
 }
 
 export interface EnrichmentResult {
@@ -23,31 +21,30 @@ export interface EnrichmentResult {
   error?: string;
 }
 
-// System prompt for Gemini AI
-const SYSTEM_PROMPT = `You are an expert cryptocurrency airdrop analyst. Your task is to analyze raw content about potential airdrops and extract structured information.
+// Simplified system prompt for clean plaintext output
+const SYSTEM_PROMPT = `You are an airdrop data extractor. Analyze the content and extract ONLY these fields in plain text format:
 
-Analyze the provided content and return a JSON object with the following fields:
-- name: The official project name (string)
-- symbol: The token ticker symbol, 3-5 uppercase letters (string)
-- description: A clear, concise description of the airdrop (2-3 sentences max) (string)
-- website: Official project website URL if found, null otherwise (string or null)
-- twitter: Twitter/X handle (without @) if found, null otherwise (string or null)
-- discord: Discord invite or server name if found, null otherwise (string or null)
-- telegram: Telegram channel/group if found, null otherwise (string or null)
-- categories: Array of relevant categories from: DeFi, NFTs, Gaming, Governance, Bridges, Testnets, Social, Infrastructure, DEX, Lending, Perpetuals, Oracle, Liquid Staking (string array)
-- isOngoing: Boolean indicating if the airdrop is currently active/claimable (boolean)
-- confidence: Your confidence in this being a legitimate airdrop (0.0 to 1.0) (number)
-- reasoning: Brief explanation of your analysis (string)
+Format your response EXACTLY like this:
+NAME: [project name]
+SYMBOL: [3-5 letter ticker]
+DESCRIPTION: [one short sentence, max 15 words]
+WEBSITE: [url if found, or NONE]
+TWITTER: [@handle if found, or NONE]
+DISCORD: [invite if found, or NONE]
+TELEGRAM: [link if found, or NONE]
+ONGOING: [YES or NO]
+CONFIDENCE: [0.0 to 1.0]
 
-Important rules:
-1. Only mark isOngoing as true if there's clear evidence the airdrop is currently active or claims are open
-2. Mark isOngoing as false if the airdrop has ended, is upcoming, or is unclear
-3. Be conservative with confidence scores - only high confidence (0.8+) for clear airdrop announcements
-4. Extract actual URLs and social handles from the content, don't fabricate
-5. Keep descriptions factual and concise
-6. If you cannot determine a field with confidence, use null or empty array
+Rules:
+1. NAME: Extract from <title> tags, headings, or first mention
+2. SYMBOL: Uppercase, 3-5 letters (e.g., JUP, JTO, ARB)
+3. DESCRIPTION: One short sentence, max 15 words, no fluff
+4. WEBSITE: Look for <a href>, domain URLs, "visit" links
+5. SOCIALS: Look for @handles, discord.gg/, t.me/ links
+6. ONGOING: YES only if "claim now", "live", "active" mentioned
+7. CONFIDENCE: 0.9+ for official announcements, 0.5+ for rumors
 
-Respond ONLY with valid JSON, no additional text.`;
+Respond in PLAINTEXT only, no JSON, no markdown, no explanations.`;
 
 export async function enrichAirdropWithGemini(
   content: string,
@@ -57,12 +54,15 @@ export async function enrichAirdropWithGemini(
     return { success: false, error: 'Gemini API key not provided' };
   }
 
-  if (!content || content.length < 50) {
+  if (!content || content.length < 20) {
     return { success: false, error: 'Content too short for analysis' };
   }
 
   try {
     const url = `${GEMINI_API_URL}?key=${geminiApiKey}`;
+    
+    // Extract text from HTML tags for cleaner input
+    const cleanContent = extractTextFromHTML(content);
     
     const response = await fetchWithTimeout(url, {
       method: 'POST',
@@ -72,18 +72,17 @@ export async function enrichAirdropWithGemini(
       body: JSON.stringify({
         contents: [{
           parts: [{
-            text: `${SYSTEM_PROMPT}\n\nContent to analyze:\n${content.slice(0, 8000)}`
+            text: `${SYSTEM_PROMPT}\n\nContent to analyze:\n${cleanContent.slice(0, 5000)}`
           }]
         }],
         generationConfig: {
           temperature: 0.1,
           topK: 1,
           topP: 1,
-          maxOutputTokens: 1024,
-          responseMimeType: 'application/json',
+          maxOutputTokens: 512,
         },
       }),
-    }, 15000); // 15 second timeout
+    }, 15000);
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
@@ -102,28 +101,15 @@ export async function enrichAirdropWithGemini(
       return { success: false, error: 'No response from Gemini AI' };
     }
 
-    const parsed = JSON.parse(data.candidates[0].content.parts[0].text);
+    const parsed = parseGeminiResponse(data.candidates[0].content.parts[0].text);
     
-    // Validate required fields
     if (!parsed.name || !parsed.description) {
       return { success: false, error: 'Invalid response format from AI' };
     }
 
     return {
       success: true,
-      data: {
-        name: sanitizeString(parsed.name),
-        symbol: sanitizeString(parsed.symbol || deriveSymbol(parsed.name)),
-        description: sanitizeString(parsed.description),
-        website: parsed.website ? sanitizeUrl(parsed.website) : null,
-        twitter: parsed.twitter ? sanitizeString(parsed.twitter) : null,
-        discord: parsed.discord ? sanitizeString(parsed.discord) : null,
-        telegram: parsed.telegram ? sanitizeString(parsed.telegram) : null,
-        categories: Array.isArray(parsed.categories) ? parsed.categories : ['DeFi'],
-        isOngoing: Boolean(parsed.isOngoing),
-        confidence: Math.min(Math.max(Number(parsed.confidence) || 0, 0), 1),
-        reasoning: sanitizeString(parsed.reasoning || ''),
-      },
+      data: parsed,
     };
   } catch (error) {
     if (error instanceof Error) {
@@ -139,7 +125,132 @@ export async function enrichAirdropWithGemini(
   }
 }
 
-// Utility functions
+// Parse plaintext response from Gemini
+function parseGeminiResponse(text: string): AirdropEnrichment {
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+  
+  const result: AirdropEnrichment = {
+    name: '',
+    symbol: '',
+    description: '',
+    website: undefined,
+    twitter: undefined,
+    discord: undefined,
+    telegram: undefined,
+    isOngoing: false,
+    confidence: 0.5,
+  };
+  
+  for (const line of lines) {
+    const [key, ...valueParts] = line.split(':');
+    const value = valueParts.join(':').trim();
+    
+    if (!key || !value) continue;
+    
+    switch (key.toUpperCase()) {
+      case 'NAME':
+        result.name = sanitizeString(value);
+        break;
+      case 'SYMBOL':
+        result.symbol = sanitizeString(value.toUpperCase()).slice(0, 5);
+        break;
+      case 'DESCRIPTION':
+        result.description = sanitizeString(value).slice(0, 200);
+        break;
+      case 'WEBSITE':
+        if (value && value.toUpperCase() !== 'NONE') {
+          result.website = extractUrl(value);
+        }
+        break;
+      case 'TWITTER':
+        if (value && value.toUpperCase() !== 'NONE') {
+          result.twitter = sanitizeString(value.replace('@', ''));
+        }
+        break;
+      case 'DISCORD':
+        if (value && value.toUpperCase() !== 'NONE') {
+          result.discord = extractUrl(value);
+        }
+        break;
+      case 'TELEGRAM':
+        if (value && value.toUpperCase() !== 'NONE') {
+          result.telegram = extractUrl(value);
+        }
+        break;
+      case 'ONGOING':
+        result.isOngoing = value.toUpperCase() === 'YES';
+        break;
+      case 'CONFIDENCE':
+        result.confidence = Math.min(Math.max(parseFloat(value) || 0.5, 0), 1);
+        break;
+    }
+  }
+  
+  return result;
+}
+
+// Extract plain text from HTML content
+function extractTextFromHTML(html: string): string {
+  // Extract title
+  const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+  const title = titleMatch ? titleMatch[1].trim() : '';
+  
+  // Extract meta description
+  const metaDescMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i);
+  const metaDesc = metaDescMatch ? metaDescMatch[1].trim() : '';
+  
+  // Extract headings
+  const headings: string[] = [];
+  const h1Matches = html.match(/<h1[^>]*>([^<]+)<\/h1>/gi);
+  const h2Matches = html.match(/<h2[^>]*>([^<]+)<\/h2>/gi);
+  const h3Matches = html.match(/<h3[^>]*>([^<]+)<\/h3>/gi);
+  if (h1Matches) headings.push(...h1Matches.map(m => m.replace(/<[^>]+>/g, '').trim()));
+  if (h2Matches) headings.push(...h2Matches.map(m => m.replace(/<[^>]+>/g, '').trim()));
+  if (h3Matches) headings.push(...h3Matches.map(m => m.replace(/<[^>]+>/g, '').trim()));
+  
+  // Extract links
+  const links: string[] = [];
+  const linkMatches = html.match(/<a[^>]*href=["']([^"']+)["'][^>]*>([^<]*)<\/a>/gi);
+  if (linkMatches) {
+    links.push(...linkMatches.map(l => {
+      const hrefMatch = l.match(/href=["']([^"']+)["']/i);
+      const textMatch = l.match(/>([^<]+)</i);
+      return `${textMatch ? textMatch[1].trim() : ''}: ${hrefMatch ? hrefMatch[1] : ''}`;
+    }));
+  }
+  
+  // Remove all HTML tags for body text
+  const bodyText = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  
+  return [title, metaDesc, ...headings, ...links.slice(0, 10), bodyText.slice(0, 3000)].filter(t => t).join('\n');
+}
+
+// Extract URL from text
+function extractUrl(text: string): string | undefined {
+  const urlMatch = text.match(/https?:\/\/[^\s<>"']+/i);
+  if (urlMatch) {
+    const url = urlMatch[0];
+    // Validate URL
+    try {
+      new URL(url);
+      return url;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function sanitizeString(input: string): string {
+  if (!input) return '';
+  return input
+    .replace(/[<>]/g, '')
+    .replace(/javascript:/gi, '')
+    .replace(/on\w+=/gi, '')
+    .trim()
+    .slice(0, 500);
+}
+
 async function fetchWithTimeout(url: string, options: RequestInit, timeout: number): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -152,33 +263,6 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeout: numb
     clearTimeout(timeoutId);
     throw error;
   }
-}
-
-function sanitizeString(input: string): string {
-  if (!input) return '';
-  return input
-    .replace(/[<>]/g, '')
-    .replace(/javascript:/gi, '')
-    .replace(/on\w+=/gi, '')
-    .trim()
-    .slice(0, 1000);
-}
-
-function sanitizeUrl(input: string): string | null {
-  if (!input) return null;
-  try {
-    const url = new URL(input);
-    if (url.protocol === 'http:' || url.protocol === 'https:') {
-      return url.toString();
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function deriveSymbol(name: string): string {
-  return name.slice(0, 4).toUpperCase().replace(/[^A-Z]/g, '');
 }
 
 // Batch enrichment with progress tracking
@@ -205,11 +289,8 @@ export async function batchEnrichAirdrops(
     const result = await enrichAirdropWithGemini(item.content, options.geminiApiKey);
     results.push({ id: item.id, result });
     
-    // Rate limiting: Gemini free tier has limits
-    // Add small delay between requests
-    if (i < items.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
+    // Rate limiting between AI calls
+    await new Promise(resolve => setTimeout(resolve, 400));
   }
   
   return results;
