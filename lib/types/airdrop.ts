@@ -1,4 +1,4 @@
-// Airdrop types and schema
+// Airdrop types and schema - No mock data, pure types only
 
 export type AirdropCategory = 
   | "DeFi"
@@ -8,13 +8,21 @@ export type AirdropCategory =
   | "Bridges"
   | "Testnets"
   | "Social"
-  | "Infrastructure";
+  | "Infrastructure"
+  | "Liquid Staking"
+  | "DEX"
+  | "Lending"
+  | "Perpetuals"
+  | "Oracle"
+  | "Wallet"
+  | "Gaming";
 
 export type FrictionLevel = "low" | "medium" | "high";
 export type ClaimType = "on-chain" | "off-chain" | "mixed";
+export type AirdropStatus = "live" | "upcoming" | "ended" | "unverified";
 
 export interface AirdropRule {
-  // Required program interactions
+  // Required program interactions (Solana program IDs)
   requiredPrograms?: string[];
   // Required token mints held
   requiredTokens?: string[];
@@ -33,26 +41,42 @@ export interface AirdropRule {
   // Time-based requirements
   earliestTransaction?: Date;
   latestTransaction?: Date;
+  // Minimum volume traded
+  minVolumeUSD?: number;
+  // Required actions
+  requiredActions?: string[];
+}
+
+export interface AirdropSource {
+  type: "github" | "rss" | "blog" | "twitter" | "discord" | "telegram" | "manual";
+  url: string;
+  fetchedAt: Date;
+  confidence: number;
 }
 
 export interface Airdrop {
   id: string;
   name: string;
-  description: string;
   symbol: string;
+  description: string;
   website: string;
   twitter?: string;
   blog?: string;
+  discord?: string;
+  telegram?: string;
   github?: string;
   
   // Claim details
   claimUrl?: string;
   claimType: ClaimType;
   claimDeadline?: Date;
+  claimStartDate?: Date;
   
   // Value estimation
   estimatedValueUSD?: number;
   estimatedValueRange?: { min: number; max: number };
+  tokenPrice?: number;
+  allocationPerUser?: string;
   
   // Categorization
   categories: AirdropCategory[];
@@ -60,24 +84,33 @@ export interface Airdrop {
   // User experience
   frictionLevel: FrictionLevel;
   
-  // Eligibility rules
+  // Eligibility rules (stored server-side only)
   rules: AirdropRule;
   
   // Metadata
   imageUrl?: string;
+  bannerUrl?: string;
   verified: boolean;
   featured: boolean;
-  live: boolean;
+  status: AirdropStatus;
+  
+  // Discovery metadata
+  sources: AirdropSource[];
+  discoveredAt: Date;
+  lastVerifiedAt?: Date;
   
   // Timestamps
   createdAt: Date;
   updatedAt: Date;
   
-  // Source information
-  source: {
-    type: "github" | "rss" | "blog" | "twitter" | "community";
-    url: string;
-  };
+  // Community metrics
+  communityScore?: number;
+  upvotes?: number;
+  downvotes?: number;
+  
+  // Additional info
+  requirements?: string[];
+  notes?: string;
 }
 
 export interface WalletActivity {
@@ -98,6 +131,8 @@ export interface WalletActivity {
   firstTransactionDate?: Date;
   // Last transaction date
   lastTransactionDate?: Date;
+  // Total volume traded
+  totalVolumeUSD?: number;
 }
 
 export interface EligibilityResult {
@@ -110,4 +145,24 @@ export interface EligibilityResult {
   claimUrl?: string;
   frictionLevel: FrictionLevel;
   categories: AirdropCategory[];
+  status: AirdropStatus;
+}
+
+export interface ScrapedContent {
+  title: string;
+  description: string;
+  url: string;
+  source: string;
+  publishedAt?: Date;
+  content?: string;
+  author?: string;
+  imageUrl?: string;
+}
+
+export interface DiscoveryResult {
+  success: boolean;
+  airdrops: Partial<Airdrop>[];
+  errors?: string[];
+  source: string;
+  scrapedAt: Date;
 }

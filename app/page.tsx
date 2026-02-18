@@ -1,30 +1,97 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { useState } from "react";
 import { AirdropCard } from "@/components/airdrop/AirdropCard";
 import { CategoryFilter } from "@/components/airdrop/CategoryFilter";
 import { WalletScannerComponent } from "@/components/airdrop/WalletScanner";
-import { WalletScanner } from "@/lib/wallet-scanner";
-import { EligibilityChecker } from "@/lib/eligibility-checker";
-import { airdrops, getLiveAirdrops, getFeaturedAirdrops, getCategoryCounts, CATEGORIES } from "@/lib/data/airdrops";
-import { AirdropCategory, EligibilityResult } from "@/lib/types/airdrop";
-import { Coins, ArrowRight, Sparkles, Shield, Wallet } from "lucide-react";
+import { Airdrop, AirdropCategory, EligibilityResult } from "@/lib/types/airdrop";
+import { Coins, ArrowRight, Sparkles, Shield, Wallet, Loader2, RefreshCw } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { ClaimAllModal } from "@/components/airdrop/ClaimAllModal";
+
+interface ApiAirdrop {
+  id: string;
+  name: string;
+  symbol: string;
+  description: string;
+  website: string;
+  twitter?: string;
+  blog?: string;
+  claimUrl?: string;
+  claimType: "on-chain" | "off-chain" | "mixed";
+  estimatedValueUSD?: number;
+  estimatedValueRange?: { min: number; max: number };
+  categories: AirdropCategory[];
+  frictionLevel: "low" | "medium" | "high";
+  imageUrl?: string;
+  verified: boolean;
+  featured: boolean;
+  status: "live" | "upcoming" | "ended" | "unverified";
+  discoveredAt: string;
+}
 
 export default function Home() {
   const [selectedCategory, setSelectedCategory] = useState<AirdropCategory | "all">("all");
   const [eligibilityResults, setEligibilityResults] = useState<EligibilityResult[]>([]);
+  const [airdrops, setAirdrops] = useState<ApiAirdrop[]>([]);
+  const [featuredAirdrops, setFeaturedAirdrops] = useState<ApiAirdrop[]>([]);
+  const [categoryCounts, setCategoryCounts] = useState<Map<AirdropCategory, number>>(new Map());
+  const [loading, setLoading] = useState(true);
+  const [showClaimModal, setShowClaimModal] = useState(false);
   const { connected } = useWallet();
 
-  const liveAirdrops = getLiveAirdrops();
-  const featuredAirdrops = getFeaturedAirdrops();
-  const categoryCounts = getCategoryCounts();
+  // Fetch airdrops from API
+  useEffect(() => {
+    fetchAirdrops();
+  }, []);
+
+  const fetchAirdrops = async () => {
+    try {
+      setLoading(true);
+      
+      // Fetch live airdrops
+      const liveResponse = await fetch("/api/airdrops?status=live");
+      const liveData = await liveResponse.json();
+      
+      // Fetch unverified airdrops
+      const unverifiedResponse = await fetch("/api/airdrops?status=unverified");
+      const unverifiedData = await unverifiedResponse.json();
+      
+      const allAirdrops = [...(liveData.data || []), ...(unverifiedData.data || [])];
+      setAirdrops(allAirdrops);
+      
+      // Filter featured
+      const featured = allAirdrops.filter((a: ApiAirdrop) => a.featured);
+      setFeaturedAirdrops(featured.slice(0, 6));
+      
+      // Calculate category counts
+      const counts = new Map<AirdropCategory, number>();
+      const categories: AirdropCategory[] = [
+        "DeFi", "NFTs", "Gaming", "Governance", "Bridges",
+        "Testnets", "Social", "Infrastructure", "Liquid Staking",
+        "DEX", "Lending", "Perpetuals", "Oracle", "Wallet"
+      ];
+      categories.forEach(cat => counts.set(cat, 0));
+      
+      allAirdrops.forEach((airdrop: ApiAirdrop) => {
+        airdrop.categories.forEach(cat => {
+          counts.set(cat, (counts.get(cat) || 0) + 1);
+        });
+      });
+      setCategoryCounts(counts);
+      
+    } catch (error) {
+      console.error("Failed to fetch airdrops:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Filter airdrops by category
   const filteredAirdrops = selectedCategory === "all"
-    ? liveAirdrops
-    : liveAirdrops.filter(a => a.categories.includes(selectedCategory));
+    ? airdrops
+    : airdrops.filter(a => a.categories.includes(selectedCategory));
 
   // Get eligibility status for connected wallet
   const getEligibility = (airdropId: string) => {
@@ -37,11 +104,12 @@ export default function Home() {
     setEligibilityResults(results);
   };
 
+  const eligibleAirdrops = eligibilityResults.filter(r => r.eligible);
+
   return (
     <div className="flex flex-col">
       {/* Hero Section */}
       <section className="relative overflow-hidden py-20 md:py-32">
-        {/* Background gradient */}
         <div className="absolute inset-0 gradient-bg" />
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-violet-200/40 via-transparent to-transparent dark:from-violet-900/20" />
         
@@ -54,7 +122,7 @@ export default function Home() {
           >
             <div className="inline-flex items-center rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5 text-sm text-primary mb-6">
               <Sparkles className="mr-2 h-4 w-4" />
-              Find & Claim Solana Airdrops
+              Real-Time Airdrop Discovery
             </div>
             
             <h1 className="text-4xl md:text-6xl font-bold tracking-tight">
@@ -64,8 +132,8 @@ export default function Home() {
             </h1>
             
             <p className="mt-6 text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto">
-              Scan your wallet, check eligibility for live Solana airdrops, and claim rewards instantly. 
-              Non-custodial. No login. Only pay a small fee when you successfully claim.
+              We scan GitHub, Twitter, and protocol blogs 24/7 to find Solana airdrops. 
+              Connect your wallet to check eligibility and claim instantly.
             </p>
             
             <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
@@ -87,12 +155,14 @@ export default function Home() {
             {/* Stats */}
             <div className="mt-16 grid grid-cols-3 gap-8 max-w-2xl mx-auto">
               <div>
-                <p className="text-3xl md:text-4xl font-bold gradient-text">{liveAirdrops.length}</p>
+                <p className="text-3xl md:text-4xl font-bold gradient-text">
+                  {loading ? "-" : airdrops.length}
+                </p>
                 <p className="mt-2 text-sm text-muted-foreground">Live Airdrops</p>
               </div>
               <div>
-                <p className="text-3xl md:text-4xl font-bold gradient-text">$2.5M+</p>
-                <p className="mt-2 text-sm text-muted-foreground">Claimed Value</p>
+                <p className="text-3xl md:text-4xl font-bold gradient-text">24/7</p>
+                <p className="mt-2 text-sm text-muted-foreground">Auto-Discovery</p>
               </div>
               <div>
                 <p className="text-3xl md:text-4xl font-bold gradient-text">2%</p>
@@ -168,17 +238,41 @@ export default function Home() {
             className="flex items-center justify-between mb-8"
           >
             <h2 className="text-3xl font-bold">Featured Airdrops</h2>
+            <button
+              onClick={fetchAirdrops}
+              className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
           </motion.div>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {featuredAirdrops.map((airdrop) => (
-              <AirdropCard
-                key={airdrop.id}
-                airdrop={airdrop}
-                eligible={getEligibility(airdrop.id)}
-              />
-            ))}
-          </div>
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </div>
+          ) : featuredAirdrops.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {featuredAirdrops.map((airdrop) => (
+                <AirdropCard
+                  key={airdrop.id}
+                  airdrop={{
+                    ...airdrop,
+                    live: airdrop.status === "live" || airdrop.status === "unverified",
+                    createdAt: new Date(airdrop.createdAt),
+                    updatedAt: new Date(airdrop.updatedAt),
+                    source: { type: "github" as const, url: airdrop.website },
+                  }}
+                  eligible={getEligibility(airdrop.id)}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-12 text-muted-foreground">
+              <p>No featured airdrops available. Check back soon!</p>
+              <p className="text-sm mt-2">Our scraper runs every 6 hours to find new airdrops.</p>
+            </div>
+          )}
         </div>
       </section>
 
@@ -205,21 +299,29 @@ export default function Home() {
             />
           </motion.div>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredAirdrops.map((airdrop) => (
-              <AirdropCard
-                key={airdrop.id}
-                airdrop={airdrop}
-                eligible={getEligibility(airdrop.id)}
-              />
-            ))}
-          </div>
-          
-          {filteredAirdrops.length === 0 && (
-            <div className="text-center py-12">
-              <p className="text-muted-foreground">
-                No airdrops found in this category.
-              </p>
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </div>
+          ) : filteredAirdrops.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {filteredAirdrops.map((airdrop) => (
+                <AirdropCard
+                  key={airdrop.id}
+                  airdrop={{
+                    ...airdrop,
+                    live: airdrop.status === "live" || airdrop.status === "unverified",
+                    createdAt: new Date(airdrop.createdAt),
+                    updatedAt: new Date(airdrop.updatedAt),
+                    source: { type: "github" as const, url: airdrop.website },
+                  }}
+                  eligible={getEligibility(airdrop.id)}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-12 text-muted-foreground">
+              <p>No airdrops found in this category.</p>
             </div>
           )}
         </div>
@@ -243,6 +345,19 @@ export default function Home() {
           <div className="max-w-4xl mx-auto">
             <WalletScannerComponent onEligibilityUpdate={handleEligibilityUpdate} />
           </div>
+          
+          {/* Claim All Button */}
+          {eligibleAirdrops.length > 0 && (
+            <div className="max-w-4xl mx-auto mt-8">
+              <button
+                onClick={() => setShowClaimModal(true)}
+                className="w-full inline-flex items-center justify-center rounded-lg bg-primary px-6 py-4 text-base font-medium text-primary-foreground hover:bg-primary/90 transition-all hover:shadow-lg hover:shadow-primary/30"
+              >
+                <Coins className="mr-2 h-5 w-5" />
+                Claim All ({eligibleAirdrops.length} airdrops)
+              </button>
+            </div>
+          )}
         </div>
       </section>
 
@@ -270,6 +385,13 @@ export default function Home() {
           </motion.div>
         </div>
       </section>
+
+      {/* Claim All Modal */}
+      <ClaimAllModal
+        eligibleAirdrops={eligibleAirdrops}
+        isOpen={showClaimModal}
+        onClose={() => setShowClaimModal(false)}
+      />
     </div>
   );
 }
