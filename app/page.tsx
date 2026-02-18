@@ -1,14 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
+import { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { AirdropCard } from "@/components/airdrop/AirdropCard";
 import { CategoryFilter } from "@/components/airdrop/CategoryFilter";
 import { WalletScannerComponent } from "@/components/airdrop/WalletScanner";
 import { Airdrop, AirdropCategory, EligibilityResult } from "@/lib/types/airdrop";
-import { Coins, ArrowRight, Sparkles, Shield, Wallet, Loader2, RefreshCw } from "lucide-react";
+import { Coins, ArrowRight, Sparkles, Shield, Wallet, Loader2, RefreshCw, Search, Play, AlertCircle } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { ClaimAllModal } from "@/components/airdrop/ClaimAllModal";
+import { getApiSettings, hasApiSettings } from "@/lib/utils/cookies";
+import Link from "next/link";
 
 interface ApiAirdrop {
   id: string;
@@ -37,11 +39,15 @@ export default function Home() {
   const [airdrops, setAirdrops] = useState<ApiAirdrop[]>([]);
   const [featuredAirdrops, setFeaturedAirdrops] = useState<ApiAirdrop[]>([]);
   const [categoryCounts, setCategoryCounts] = useState<Map<AirdropCategory, number>>(new Map());
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState<{ current: string; count: number } | null>(null);
   const [showClaimModal, setShowClaimModal] = useState(false);
+  const [lastScanTime, setLastScanTime] = useState<Date | null>(null);
   const { connected } = useWallet();
+  const apiSettings = hasApiSettings();
 
-  // Fetch airdrops from API
+  // Fetch airdrops on mount (just load existing, don't scan)
   useEffect(() => {
     fetchAirdrops();
   }, []);
@@ -50,22 +56,18 @@ export default function Home() {
     try {
       setLoading(true);
       
-      // Fetch live airdrops
       const liveResponse = await fetch("/api/airdrops?status=live");
       const liveData = await liveResponse.json();
       
-      // Fetch unverified airdrops
       const unverifiedResponse = await fetch("/api/airdrops?status=unverified");
       const unverifiedData = await unverifiedResponse.json();
       
       const allAirdrops = [...(liveData.data || []), ...(unverifiedData.data || [])];
       setAirdrops(allAirdrops);
       
-      // Filter featured
       const featured = allAirdrops.filter((a: ApiAirdrop) => a.featured);
       setFeaturedAirdrops(featured.slice(0, 6));
       
-      // Calculate category counts
       const counts = new Map<AirdropCategory, number>();
       const categories: AirdropCategory[] = [
         "DeFi", "NFTs", "Gaming", "Governance", "Bridges",
@@ -88,12 +90,63 @@ export default function Home() {
     }
   };
 
-  // Filter airdrops by category
+  const runScanner = async () => {
+    setScanning(true);
+    setScanProgress({ current: "Initializing...", count: 0 });
+    
+    try {
+      // Check if API keys are configured
+      const settings = getApiSettings();
+      if (!settings.githubToken && !settings.twitterBearerToken) {
+        if (!confirm("No API keys configured. Scanner will use limited unauthenticated requests. Configure keys in Settings?")) {
+          setScanning(false);
+          setScanProgress(null);
+          return;
+        }
+      }
+      
+      // Start scanning
+      const response = await fetch("/api/scraper/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sources: ["github", "rss", "twitter"],
+          limit: 100,
+        }),
+      });
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        setScanProgress({ 
+          current: "Complete!", 
+          count: result.data.newAirdrops + result.data.updatedAirdrops 
+        });
+        setLastScanTime(new Date());
+        
+        // Refresh airdrop list
+        await fetchAirdrops();
+        
+        // Show success message
+        setTimeout(() => {
+          alert(`Scan complete! Found ${result.data.newAirdrops} new airdrops and updated ${result.data.updatedAirdrops} existing ones.`);
+        }, 500);
+      } else {
+        alert(`Scan failed: ${result.error || "Unknown error"}`);
+      }
+    } catch (error) {
+      console.error("Scanner error:", error);
+      alert(`Scan failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setScanning(false);
+      setTimeout(() => setScanProgress(null), 3000);
+    }
+  };
+
   const filteredAirdrops = selectedCategory === "all"
     ? airdrops
     : airdrops.filter(a => a.categories.includes(selectedCategory));
 
-  // Get eligibility status for connected wallet
   const getEligibility = (airdropId: string) => {
     if (!connected || eligibilityResults.length === 0) return undefined;
     const result = eligibilityResults.find(r => r.airdropId === airdropId);
@@ -132,25 +185,85 @@ export default function Home() {
             </h1>
             
             <p className="mt-6 text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto">
-              We scan GitHub, Twitter, and protocol blogs 24/7 to find Solana airdrops. 
+              Scan GitHub, Twitter, and protocol blogs to find Solana airdrops. 
               Connect your wallet to check eligibility and claim instantly.
             </p>
             
+            {/* Scan Button */}
             <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
+              <button
+                onClick={runScanner}
+                disabled={scanning}
+                className={`
+                  inline-flex items-center rounded-lg px-8 py-4 text-base font-medium 
+                  transition-all hover:shadow-lg hover:shadow-primary/30
+                  ${scanning 
+                    ? "bg-muted text-muted-foreground cursor-not-allowed" 
+                    : "bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white hover:from-violet-700 hover:to-fuchsia-700"
+                  }
+                `}
+              >
+                {scanning ? (
+                  <>
+                    <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                    Scanning...
+                  </>
+                ) : (
+                  <>
+                    <Search className="mr-2 h-5 w-5" />
+                    Scan for Airdrops
+                  </>
+                )}
+              </button>
+              
               <a
                 href="#airdrops"
-                className="inline-flex items-center rounded-lg bg-primary px-8 py-3 text-base font-medium text-primary-foreground hover:bg-primary/90 transition-all hover:shadow-lg hover:shadow-primary/30"
+                className="inline-flex items-center rounded-lg border border-border bg-background px-8 py-4 text-base font-medium hover:bg-accent transition-colors"
               >
                 Browse Airdrops
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </a>
-              <a
-                href="#how-it-works"
-                className="inline-flex items-center rounded-lg border border-border bg-background px-8 py-3 text-base font-medium hover:bg-accent transition-colors"
-              >
-                How It Works
               </a>
             </div>
+            
+            {/* Scan Status */}
+            <AnimatePresence>
+              {scanProgress && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  className="mt-6 inline-flex items-center rounded-lg bg-primary/10 px-4 py-2 text-sm text-primary"
+                >
+                  {scanning ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      {scanProgress.current}
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="mr-2 h-4 w-4" />
+                      Found {scanProgress.count} airdrops
+                    </>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+            
+            {/* Last scan time */}
+            {lastScanTime && !scanning && (
+              <p className="mt-4 text-sm text-muted-foreground">
+                Last scan: {lastScanTime.toLocaleString()}
+              </p>
+            )}
+            
+            {/* API Status Warning */}
+            {!apiSettings.all && (
+              <Link href="/settings">
+                <div className="mt-6 inline-flex items-center rounded-lg bg-yellow-100 dark:bg-yellow-900/20 px-4 py-2 text-sm text-yellow-800 dark:text-yellow-200 hover:bg-yellow-200 dark:hover:bg-yellow-900/40 transition-colors">
+                  <AlertCircle className="mr-2 h-4 w-4" />
+                  Configure API keys for better results →
+                </div>
+              </Link>
+            )}
             
             {/* Stats */}
             <div className="mt-16 grid grid-cols-3 gap-8 max-w-2xl mx-auto">
@@ -161,8 +274,8 @@ export default function Home() {
                 <p className="mt-2 text-sm text-muted-foreground">Live Airdrops</p>
               </div>
               <div>
-                <p className="text-3xl md:text-4xl font-bold gradient-text">24/7</p>
-                <p className="mt-2 text-sm text-muted-foreground">Auto-Discovery</p>
+                <p className="text-3xl md:text-4xl font-bold gradient-text">On-Demand</p>
+                <p className="mt-2 text-sm text-muted-foreground">Manual Scanning</p>
               </div>
               <div>
                 <p className="text-3xl md:text-4xl font-bold gradient-text">2%</p>
@@ -191,19 +304,19 @@ export default function Home() {
           <div className="grid md:grid-cols-3 gap-8 max-w-5xl mx-auto">
             {[
               {
+                icon: Search,
+                title: "Scan for Airdrops",
+                description: "Click the scan button to search GitHub, Twitter, and blogs for new airdrops.",
+              },
+              {
                 icon: Wallet,
                 title: "Connect Wallet",
                 description: "Connect your Solana wallet securely. We never custody your funds.",
               },
               {
-                icon: Shield,
-                title: "Check Eligibility",
-                description: "We scan your on-chain activity and match you with eligible airdrops.",
-              },
-              {
                 icon: Coins,
                 title: "Claim Rewards",
-                description: "Claim directly through our fee router. Pay 2% only on success.",
+                description: "Check eligibility and claim directly. Pay 2% only on success.",
               },
             ].map((step, index) => (
               <motion.div
@@ -269,8 +382,8 @@ export default function Home() {
             </div>
           ) : (
             <div className="text-center py-12 text-muted-foreground">
-              <p>No featured airdrops available. Check back soon!</p>
-              <p className="text-sm mt-2">Our scraper runs every 6 hours to find new airdrops.</p>
+              <p>No airdrops found yet.</p>
+              <p className="text-sm mt-2">Click &quot;Scan for Airdrops&quot; above to discover new airdrops!</p>
             </div>
           )}
         </div>
@@ -322,6 +435,14 @@ export default function Home() {
           ) : (
             <div className="text-center py-12 text-muted-foreground">
               <p>No airdrops found in this category.</p>
+              <button
+                onClick={runScanner}
+                disabled={scanning}
+                className="mt-4 inline-flex items-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                <Search className="mr-2 h-4 w-4" />
+                {scanning ? "Scanning..." : "Scan for Airdrops"}
+              </button>
             </div>
           )}
         </div>
@@ -370,18 +491,28 @@ export default function Home() {
             viewport={{ once: true }}
           >
             <h2 className="text-3xl md:text-4xl font-bold text-white">
-              Ready to Claim Your Airdrops?
+              Ready to Find More Airdrops?
             </h2>
             <p className="mt-4 text-lg text-white/80 max-w-2xl mx-auto">
-              Connect your wallet and start claiming free tokens from Solana protocols you already use.
+              Run the scanner to discover the latest airdrop opportunities.
             </p>
-            <a
-              href="#airdrops"
-              className="mt-8 inline-flex items-center rounded-lg bg-white px-8 py-3 text-base font-medium text-primary hover:bg-white/90 transition-colors"
+            <button
+              onClick={runScanner}
+              disabled={scanning}
+              className="mt-8 inline-flex items-center rounded-lg bg-white px-8 py-4 text-base font-medium text-primary hover:bg-white/90 transition-colors disabled:opacity-50"
             >
-              Get Started Now
-              <ArrowRight className="ml-2 h-4 w-4" />
-            </a>
+              {scanning ? (
+                <>
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                  Scanning...
+                </>
+              ) : (
+                <>
+                  <Search className="mr-2 h-5 w-5" />
+                  Scan for Airdrops Now
+                </>
+              )}
+            </button>
           </motion.div>
         </div>
       </section>
