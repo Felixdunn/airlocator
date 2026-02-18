@@ -37,21 +37,15 @@ export interface ApiSettings {
   twitterBearerToken?: string;
   solanaRpcUrl?: string;
   adminToken?: string;
+  geminiApiKey?: string;
 }
 
 export function saveApiSettings(settings: ApiSettings) {
-  if (settings.githubToken) {
-    setCookie('api_github_token', settings.githubToken, 30);
-  }
-  if (settings.twitterBearerToken) {
-    setCookie('api_twitter_token', settings.twitterBearerToken, 30);
-  }
-  if (settings.solanaRpcUrl) {
-    setCookie('api_solana_rpc', settings.solanaRpcUrl, 30);
-  }
-  if (settings.adminToken) {
-    setCookie('api_admin_token', settings.adminToken, 30);
-  }
+  if (settings.githubToken) setCookie('api_github_token', settings.githubToken, 30);
+  if (settings.twitterBearerToken) setCookie('api_twitter_token', settings.twitterBearerToken, 30);
+  if (settings.solanaRpcUrl) setCookie('api_solana_rpc', settings.solanaRpcUrl, 30);
+  if (settings.adminToken) setCookie('api_admin_token', settings.adminToken, 30);
+  if (settings.geminiApiKey) setCookie('api_gemini_key', settings.geminiApiKey, 30);
 }
 
 export function getApiSettings(): ApiSettings {
@@ -60,6 +54,7 @@ export function getApiSettings(): ApiSettings {
     twitterBearerToken: getCookie('api_twitter_token') || undefined,
     solanaRpcUrl: getCookie('api_solana_rpc') || undefined,
     adminToken: getCookie('api_admin_token') || undefined,
+    geminiApiKey: getCookie('api_gemini_key') || undefined,
   };
 }
 
@@ -68,22 +63,24 @@ export function clearApiSettings() {
   deleteCookie('api_twitter_token');
   deleteCookie('api_solana_rpc');
   deleteCookie('api_admin_token');
+  deleteCookie('api_gemini_key');
 }
 
-// Check if settings are configured
 export function hasApiSettings(): {
   all: boolean;
   github: boolean;
   twitter: boolean;
   solanaRpc: boolean;
   admin: boolean;
+  gemini: boolean;
 } {
   const settings = getApiSettings();
   return {
-    all: !!(settings.githubToken && settings.twitterBearerToken && settings.solanaRpcUrl),
+    all: !!(settings.githubToken && settings.twitterBearerToken && settings.solanaRpcUrl && settings.geminiApiKey),
     github: !!settings.githubToken,
     twitter: !!settings.twitterBearerToken,
     solanaRpc: !!settings.solanaRpcUrl,
     admin: !!settings.adminToken,
+    gemini: !!settings.geminiApiKey,
   };
 }
