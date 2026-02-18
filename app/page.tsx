@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { motion } from "framer-motion";
 import { AirdropCard } from "@/components/airdrop/AirdropCard";
 import { CategoryFilter } from "@/components/airdrop/CategoryFilter";
 import { WalletScannerComponent } from "@/components/airdrop/WalletScanner";
 import { Airdrop, AirdropCategory, EligibilityResult } from "@/lib/types/airdrop";
-import { Coins, ArrowRight, Sparkles, Shield, Wallet, Loader2, RefreshCw, Search, CheckCircle2, AlertCircle, Clock, Zap } from "lucide-react";
+import { Coins, ArrowRight, Sparkles, Shield, Wallet, Loader2, RefreshCw, Search, CheckCircle2, AlertCircle, Clock, Zap, Globe } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { ClaimAllModal } from "@/components/airdrop/ClaimAllModal";
 import { getApiSettings, hasApiSettings } from "@/lib/utils/cookies";
@@ -32,14 +32,15 @@ interface ApiAirdrop {
   featured: boolean;
   status: "live" | "upcoming" | "ended" | "unverified";
   discoveredAt: string;
+  chains?: string[];
+  primaryChain?: string;
 }
 
 interface ScanProgress {
-  stage: 'initializing' | 'scanning-github' | 'scanning-rss' | 'scanning-twitter' | 'ai-enrichment' | 'filtering' | 'complete';
-  current: number;
-  total: number;
+  stage: string;
+  percent: number;
   currentItem?: string;
-  estimatedTimeRemaining?: number; // seconds
+  etaSeconds?: number;
 }
 
 export default function Home() {
@@ -56,6 +57,8 @@ export default function Home() {
   const [lastScanResults, setLastScanResults] = useState<{ new: number; enriched: number; filtered: number } | null>(null);
   const { connected } = useWallet();
   const apiSettings = hasApiSettings();
+  const scanStartTime = useRef<number>(0);
+  const progressInterval = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     fetchAirdrops();
@@ -64,27 +67,19 @@ export default function Home() {
   const fetchAirdrops = async () => {
     try {
       setLoading(true);
-      
-      const liveResponse = await fetch("/api/airdrops?status=live");
-      const liveData = await liveResponse.json();
-      
-      const allAirdrops = liveData.data || [];
+      const response = await fetch("/api/airdrops?status=live");
+      const data = await response.json();
+      const allAirdrops = data.data || [];
       setAirdrops(allAirdrops);
-      
-      const featured = allAirdrops.filter((a: ApiAirdrop) => a.featured && a.verified);
-      setFeaturedAirdrops(featured.slice(0, 6));
+      setFeaturedAirdrops(allAirdrops.filter((a: ApiAirdrop) => a.featured && a.verified).slice(0, 6));
       
       const counts = new Map<AirdropCategory, number>();
-      const categories: AirdropCategory[] = ["DeFi", "NFTs", "Gaming", "Governance", "Bridges", "Testnets", "Social", "Infrastructure", "Liquid Staking", "DEX", "Lending", "Perpetuals", "Oracle", "Wallet"];
+      const categories: AirdropCategory[] = ["DeFi", "NFTs", "Gaming", "Governance", "Bridges", "Testnets", "Social", "Infrastructure", "Liquid Staking", "DEX", "Lending", "Perpetuals", "Oracle", "Wallet", "Layer 2", "Restaking"];
       categories.forEach(cat => counts.set(cat, 0));
-      
-      allAirdrops.forEach((airdrop: ApiAirdrop) => {
-        airdrop.categories.forEach(cat => {
-          counts.set(cat, (counts.get(cat) || 0) + 1);
-        });
+      allAirdrops.forEach((a: ApiAirdrop) => {
+        a.categories.forEach(cat => counts.set(cat, (counts.get(cat) || 0) + 1));
       });
       setCategoryCounts(counts);
-      
     } catch (error) {
       console.error("Failed to fetch airdrops:", error);
     } finally {
@@ -94,139 +89,97 @@ export default function Home() {
 
   const runScanner = async () => {
     setScanning(true);
-    setScanProgress({ stage: 'initializing', current: 0, total: 100 });
+    setScanProgress({ stage: 'Initializing scanner...', percent: 0, etaSeconds: undefined });
     setLastScanResults(null);
+    scanStartTime.current = Date.now();
     
     try {
       const settings = getApiSettings();
       const useAI = !!settings.geminiApiKey;
       
-      if (!settings.githubToken && !settings.twitterBearerToken) {
-        if (!confirm("No API keys configured. Scanner will use limited unauthenticated requests. Configure keys in Settings?")) {
-          setScanning(false);
-          setScanProgress(null);
-          return;
-        }
-      }
+      // Start progress simulation
+      const totalEstimatedTime = 45000; // 45 seconds estimated total
+      const stages = [
+        { name: 'Initializing scanner...', percent: 5 },
+        { name: 'Scanning GitHub repositories...', percent: 35 },
+        { name: 'Scanning protocol blogs (RSS)...', percent: 55 },
+        { name: 'Scanning Twitter announcements...', percent: 70 },
+        { name: 'AI enrichment with Gemini...', percent: 85 },
+        { name: 'Filtering ongoing airdrops...', percent: 95 },
+        { name: 'Complete!', percent: 100 },
+      ];
       
-      // Start scanning with progress updates
-      const startTime = Date.now();
+      let stageIndex = 0;
+      
+      progressInterval.current = setInterval(() => {
+        const elapsed = Date.now() - scanStartTime.current;
+        const currentStage = stages[Math.min(stageIndex, stages.length - 1)];
+        const remaining = Math.max(0, Math.ceil((totalEstimatedTime - elapsed) / 1000));
+        
+        setScanProgress({
+          stage: currentStage.name,
+          percent: currentStage.percent,
+          etaSeconds: stageIndex < stages.length - 1 ? remaining : 0,
+        });
+        
+        // Advance stage based on time
+        const expectedStageTime = (currentStage.percent / 100) * totalEstimatedTime;
+        if (elapsed > expectedStageTime && stageIndex < stages.length - 1) {
+          stageIndex++;
+        }
+      }, 500);
       
       const response = await fetch("/api/scraper/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sources: ["github", "rss", "twitter"],
-          limit: 100,
-          useAI,
-        }),
+        body: JSON.stringify({ sources: ["github", "rss", "twitter"], limit: 150, useAI }),
       });
       
       const result = await response.json();
-      const elapsed = (Date.now() - startTime) / 1000;
+      
+      if (progressInterval.current) {
+        clearInterval(progressInterval.current);
+      }
       
       if (result.success) {
-        setScanProgress({ 
-          stage: 'complete', 
-          current: 100, 
-          total: 100,
-          estimatedTimeRemaining: 0,
-        });
+        setScanProgress({ stage: 'Scan complete!', percent: 100, etaSeconds: 0 });
         setLastScanTime(new Date());
         setLastScanResults({
           new: result.data.newAirdrops,
           enriched: result.data.enrichedWithAI || 0,
           filtered: result.data.filteredOut || 0,
         });
-        
         await fetchAirdrops();
         
         setTimeout(() => {
           setScanning(false);
           setScanProgress(null);
-        }, 3000);
+        }, 4000);
       } else {
         throw new Error(result.error || "Scan failed");
       }
     } catch (error) {
       console.error("Scanner error:", error);
+      if (progressInterval.current) clearInterval(progressInterval.current);
       setScanning(false);
       setScanProgress(null);
       alert(`Scan failed: ${error instanceof Error ? error.message : "Unknown error"}`);
     }
   };
 
-  // Update progress simulation (since we can't do real SSE easily)
   useEffect(() => {
-    if (!scanning || !scanProgress) return;
-    
-    const stages: ScanProgress['stage'][] = [
-      'initializing',
-      'scanning-github',
-      'scanning-rss',
-      'scanning-twitter',
-      'ai-enrichment',
-      'filtering',
-      'complete'
-    ];
-    
-    const currentStageIndex = stages.indexOf(scanProgress.stage);
-    const totalStages = stages.length;
-    
-    // Simulate progress through stages
-    const interval = setInterval(() => {
-      setScanProgress(prev => {
-        if (!prev || prev.stage === 'complete') return prev;
-        
-        const progressPerStage = 100 / totalStages;
-        const baseProgress = currentStageIndex * progressPerStage;
-        const newProgress = Math.min(prev.current + 2, baseProgress + progressPerStage);
-        
-        // Calculate ETA based on progress
-        const elapsed = Date.now();
-        const percentComplete = newProgress / 100;
-        const estimatedTotal = elapsed / percentComplete;
-        const remaining = Math.max(0, estimatedTotal - elapsed);
-        
-        return {
-          ...prev,
-          current: newProgress,
-          estimatedTimeRemaining: Math.ceil(remaining / 1000),
-        };
-      });
-    }, 200);
-    
-    return () => clearInterval(interval);
-  }, [scanning, scanProgress?.stage]);
+    return () => {
+      if (progressInterval.current) clearInterval(progressInterval.current);
+    };
+  }, []);
 
-  const filteredAirdrops = selectedCategory === "all"
-    ? airdrops
-    : airdrops.filter(a => a.categories.includes(selectedCategory));
-
+  const filteredAirdrops = selectedCategory === "all" ? airdrops : airdrops.filter(a => a.categories.includes(selectedCategory));
   const getEligibility = (airdropId: string) => {
     if (!connected || eligibilityResults.length === 0) return undefined;
-    const result = eligibilityResults.find(r => r.airdropId === airdropId);
-    return result?.eligible;
+    return eligibilityResults.find(r => r.airdropId === airdropId)?.eligible;
   };
-
-  const handleEligibilityUpdate = (results: EligibilityResult[]) => {
-    setEligibilityResults(results);
-  };
-
+  const handleEligibilityUpdate = (results: EligibilityResult[]) => setEligibilityResults(results);
   const eligibleAirdrops = eligibilityResults.filter(r => r.eligible);
-
-  const getStageDisplay = (stage: ScanProgress['stage']) => {
-    const displays = {
-      'initializing': 'Initializing scanner...',
-      'scanning-github': 'Scanning GitHub repositories...',
-      'scanning-rss': 'Scanning protocol blogs...',
-      'scanning-twitter': 'Scanning Twitter announcements...',
-      'ai-enrichment': 'AI enrichment with Gemini...',
-      'filtering': 'Filtering ongoing airdrops...',
-      'complete': 'Scan complete!',
-    };
-    return displays[stage] || stage;
-  };
 
   return (
     <div className="flex flex-col">
@@ -236,107 +189,48 @@ export default function Home() {
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-violet-200/40 via-transparent to-transparent dark:from-violet-900/20" />
         
         <div className="container relative mx-auto px-4">
-          <motion.div
-            initial={{ opacity: 0, y: 30 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6 }}
-            className="text-center max-w-4xl mx-auto"
-          >
+          <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }} className="text-center max-w-4xl mx-auto">
             <div className="inline-flex items-center rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5 text-sm text-primary mb-6">
-              <Sparkles className="mr-2 h-4 w-4" />
-              AI-Powered Airdrop Discovery
+              <Globe className="mr-2 h-4 w-4" />
+              Multi-Chain Airdrop Discovery
             </div>
             
             <h1 className="text-4xl md:text-6xl font-bold tracking-tight">
-              Discover{" "}
-              <span className="gradient-text">Free Crypto</span>{" "}
-              You Didn&apos;t Know You Had
+              Discover <span className="gradient-text">Free Crypto</span> Across All Chains
             </h1>
             
             <p className="mt-6 text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto">
-              Scan GitHub, Twitter, and protocol blogs to find ongoing Solana airdrops.
+              Scan Ethereum, Solana, Base, Arbitrum, and 10+ more chains for ongoing airdrops.
               AI verifies claims and filters out ended airdrops.
             </p>
             
             {/* Scan Button */}
             <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
-              <button
-                onClick={runScanner}
-                disabled={scanning}
-                className={`
-                  inline-flex items-center rounded-lg px-8 py-4 text-base font-medium 
-                  transition-all hover:shadow-lg hover:shadow-primary/30
-                  ${scanning 
-                    ? "bg-muted text-muted-foreground cursor-not-allowed" 
-                    : "bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white hover:from-violet-700 hover:to-fuchsia-700"
-                  }
-                `}
-              >
-                {scanning ? (
-                  <>
-                    <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                    Scanning...
-                  </>
-                ) : (
-                  <>
-                    <Search className="mr-2 h-5 w-5" />
-                    Scan for Airdrops
-                  </>
-                )}
+              <button onClick={runScanner} disabled={scanning} className={`inline-flex items-center rounded-lg px-8 py-4 text-base font-medium transition-all hover:shadow-lg hover:shadow-primary/30 ${scanning ? "bg-muted text-muted-foreground cursor-not-allowed" : "bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white hover:from-violet-700 hover:to-fuchsia-700"}`}>
+                {scanning ? (<><Loader2 className="mr-2 h-5 w-5 animate-spin" />Scanning...</>) : (<><Search className="mr-2 h-5 w-5" />Scan for Airdrops</>)}
               </button>
-              
-              <a
-                href="#airdrops"
-                className="inline-flex items-center rounded-lg border border-border bg-background px-8 py-4 text-base font-medium hover:bg-accent transition-colors"
-              >
-                Browse Airdrops
-              </a>
+              <a href="#airdrops" className="inline-flex items-center rounded-lg border border-border bg-background px-8 py-4 text-base font-medium hover:bg-accent transition-colors">Browse Airdrops</a>
             </div>
             
             {/* Scan Progress */}
             {scanning && scanProgress && (
-              <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="mt-8 max-w-xl mx-auto"
-              >
-                {/* Progress Bar */}
-                <div className="w-full bg-muted rounded-full h-3 overflow-hidden">
-                  <motion.div
-                    className="h-full bg-gradient-to-r from-violet-600 to-fuchsia-600"
-                    initial={{ width: 0 }}
-                    animate={{ width: `${scanProgress.current}%` }}
-                    transition={{ duration: 0.3 }}
-                  />
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mt-8 max-w-xl mx-auto">
+                <div className="w-full bg-muted rounded-full h-4 overflow-hidden">
+                  <motion.div className="h-full bg-gradient-to-r from-violet-600 to-fuchsia-600" initial={{ width: 0 }} animate={{ width: `${scanProgress.percent}%` }} transition={{ duration: 0.3 }} />
                 </div>
-                
-                {/* Status */}
                 <div className="mt-4 flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">{getStageDisplay(scanProgress.stage)}</span>
-                  {scanProgress.estimatedTimeRemaining && scanProgress.estimatedTimeRemaining > 0 && (
-                    <span className="inline-flex items-center text-primary">
-                      <Clock className="h-3 w-3 mr-1" />
-                      ETA: {scanProgress.estimatedTimeRemaining}s
-                    </span>
+                  <span className="text-muted-foreground">{scanProgress.stage}</span>
+                  {scanProgress.etaSeconds !== undefined && scanProgress.etaSeconds > 0 && (
+                    <span className="inline-flex items-center text-primary"><Clock className="h-3 w-3 mr-1" />ETA: {scanProgress.etaSeconds}s</span>
                   )}
                 </div>
-                
-                {/* Current Item */}
-                {scanProgress.currentItem && (
-                  <p className="mt-2 text-xs text-muted-foreground truncate">
-                    Processing: {scanProgress.currentItem}
-                  </p>
-                )}
+                {scanProgress.currentItem && <p className="mt-2 text-xs text-muted-foreground truncate">Processing: {scanProgress.currentItem}</p>}
               </motion.div>
             )}
             
             {/* Scan Results */}
             {lastScanResults && !scanning && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="mt-8 grid grid-cols-3 gap-4 max-w-2xl mx-auto"
-              >
+              <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="mt-8 grid grid-cols-3 gap-4 max-w-2xl mx-auto">
                 <div className="rounded-lg bg-green-100 dark:bg-green-900/20 p-4 text-center">
                   <CheckCircle2 className="h-6 w-6 text-green-600 mx-auto mb-1" />
                   <p className="text-2xl font-bold text-green-700 dark:text-green-400">{lastScanResults.new}</p>
@@ -355,14 +249,8 @@ export default function Home() {
               </motion.div>
             )}
             
-            {/* Last scan time */}
-            {lastScanTime && !scanning && (
-              <p className="mt-6 text-sm text-muted-foreground">
-                Last scan: {lastScanTime.toLocaleString()}
-              </p>
-            )}
+            {lastScanTime && !scanning && <p className="mt-6 text-sm text-muted-foreground">Last scan: {lastScanTime.toLocaleString()}</p>}
             
-            {/* API Status Warning */}
             {!apiSettings.all && (
               <Link href="/settings">
                 <div className="mt-6 inline-flex items-center rounded-lg bg-yellow-100 dark:bg-yellow-900/20 px-4 py-2 text-sm text-yellow-800 dark:text-yellow-200 hover:bg-yellow-200 dark:hover:bg-yellow-900/40 transition-colors">
@@ -374,69 +262,72 @@ export default function Home() {
             
             {/* Stats */}
             <div className="mt-16 grid grid-cols-3 gap-8 max-w-2xl mx-auto">
-              <div>
-                <p className="text-3xl md:text-4xl font-bold gradient-text">
-                  {loading ? "-" : airdrops.length}
-                </p>
-                <p className="mt-2 text-sm text-muted-foreground">Live Airdrops</p>
-              </div>
-              <div>
-                <p className="text-3xl md:text-4xl font-bold gradient-text">AI-Powered</p>
-                <p className="mt-2 text-sm text-muted-foreground">Smart Filtering</p>
-              </div>
-              <div>
-                <p className="text-3xl md:text-4xl font-bold gradient-text">2%</p>
-                <p className="mt-2 text-sm text-muted-foreground">Success Fee</p>
-              </div>
+              <div><p className="text-3xl md:text-4xl font-bold gradient-text">{loading ? "-" : airdrops.length}</p><p className="mt-2 text-sm text-muted-foreground">Live Airdrops</p></div>
+              <div><p className="text-3xl md:text-4xl font-bold gradient-text">15+ Chains</p><p className="mt-2 text-sm text-muted-foreground">Multi-Chain</p></div>
+              <div><p className="text-3xl md:text-4xl font-bold gradient-text">2%</p><p className="mt-2 text-sm text-muted-foreground">Success Fee</p></div>
             </div>
           </motion.div>
         </div>
       </section>
 
-      {/* ... rest of the page (Featured Airdrops, All Airdrops, Wallet Scanner sections) ... */}
-      {/* For brevity, reuse existing sections from previous page.tsx */}
-      
-      {/* CTA Section */}
+      {/* Featured Airdrops */}
+      <section className="py-20">
+        <div className="container mx-auto px-4">
+          <motion.div initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} className="flex items-center justify-between mb-8">
+            <h2 className="text-3xl font-bold">Featured Airdrops</h2>
+            <button onClick={fetchAirdrops} className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"><RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
+          </motion.div>
+          
+          {loading ? (<div className="flex items-center justify-center py-12"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>) : featuredAirdrops.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {featuredAirdrops.map((airdrop) => (<AirdropCard key={airdrop.id} airdrop={{...airdrop, live: airdrop.status === "live" || airdrop.status === "unverified", createdAt: new Date(airdrop.createdAt), updatedAt: new Date(airdrop.updatedAt), source: { type: "github" as const, url: airdrop.website }}} eligible={getEligibility(airdrop.id)} />))}
+            </div>
+          ) : (<div className="text-center py-12 text-muted-foreground"><p>No featured airdrops yet. Run a scan to discover new opportunities!</p></div>)}
+        </div>
+      </section>
+
+      {/* All Airdrops */}
+      <section id="airdrops" className="py-20 bg-muted/50">
+        <div className="container mx-auto px-4">
+          <motion.div initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
+            <div><h2 className="text-3xl font-bold">All Live Airdrops</h2><p className="text-muted-foreground mt-1">{filteredAirdrops.length} airdrops across all chains</p></div>
+            <CategoryFilter categories={categoryCounts} selectedCategory={selectedCategory} onCategoryChange={setSelectedCategory} />
+          </motion.div>
+          
+          {loading ? (<div className="flex items-center justify-center py-12"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>) : filteredAirdrops.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {filteredAirdrops.map((airdrop) => (<AirdropCard key={airdrop.id} airdrop={{...airdrop, live: airdrop.status === "live" || airdrop.status === "unverified", createdAt: new Date(airdrop.createdAt), updatedAt: new Date(airdrop.updatedAt), source: { type: "github" as const, url: airdrop.website }}} eligible={getEligibility(airdrop.id)} />))}
+            </div>
+          ) : (<div className="text-center py-12 text-muted-foreground"><p>No airdrops found.</p><button onClick={runScanner} disabled={scanning} className="mt-4 inline-flex items-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"><Search className="mr-2 h-4 w-4" />{scanning ? "Scanning..." : "Scan for Airdrops"}</button></div>)}
+        </div>
+      </section>
+
+      {/* Wallet Scanner */}
+      <section className="py-20">
+        <div className="container mx-auto px-4">
+          <motion.div initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} className="text-center mb-12">
+            <h2 className="text-3xl font-bold">Check Your Eligibility</h2>
+            <p className="mt-4 text-lg text-muted-foreground">Scan your wallets to find claimable airdrops</p>
+          </motion.div>
+          <div className="max-w-4xl mx-auto"><WalletScannerComponent onEligibilityUpdate={handleEligibilityUpdate} /></div>
+          {eligibleAirdrops.length > 0 && (<div className="max-w-4xl mx-auto mt-8"><button onClick={() => setShowClaimModal(true)} className="w-full inline-flex items-center justify-center rounded-lg bg-primary px-6 py-4 text-base font-medium text-primary-foreground hover:bg-primary/90 transition-all hover:shadow-lg hover:shadow-primary/30"><Coins className="mr-2 h-5 w-5" />Claim All ({eligibleAirdrops.length} airdrops)</button></div>)}
+        </div>
+      </section>
+
+      {/* CTA */}
       <section className="py-20 bg-gradient-to-r from-violet-600 to-fuchsia-600">
         <div className="container mx-auto px-4 text-center">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-          >
-            <h2 className="text-3xl md:text-4xl font-bold text-white">
-              Ready to Find More Airdrops?
-            </h2>
-            <p className="mt-4 text-lg text-white/80 max-w-2xl mx-auto">
-              Run the scanner to discover the latest ongoing airdrop opportunities.
-            </p>
-            <button
-              onClick={runScanner}
-              disabled={scanning}
-              className="mt-8 inline-flex items-center rounded-lg bg-white px-8 py-4 text-base font-medium text-primary hover:bg-white/90 transition-colors disabled:opacity-50"
-            >
-              {scanning ? (
-                <>
-                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                  Scanning...
-                </>
-              ) : (
-                <>
-                  <Search className="mr-2 h-5 w-5" />
-                  Scan for Airdrops Now
-                </>
-              )}
+          <motion.div initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}>
+            <h2 className="text-3xl md:text-4xl font-bold text-white">Ready to Find More Airdrops?</h2>
+            <p className="mt-4 text-lg text-white/80 max-w-2xl mx-auto">Scan 15+ chains for the latest ongoing airdrop opportunities.</p>
+            <button onClick={runScanner} disabled={scanning} className="mt-8 inline-flex items-center rounded-lg bg-white px-8 py-4 text-base font-medium text-primary hover:bg-white/90 transition-colors disabled:opacity-50">
+              {scanning ? (<><Loader2 className="mr-2 h-5 w-5 animate-spin" />Scanning...</>) : (<><Search className="mr-2 h-5 w-5" />Scan All Chains</>)}
             </button>
           </motion.div>
         </div>
       </section>
 
-      {/* Claim All Modal */}
-      <ClaimAllModal
-        eligibleAirdrops={eligibleAirdrops}
-        isOpen={showClaimModal}
-        onClose={() => setShowClaimModal(false)}
-      />
+      <ClaimAllModal eligibleAirdrops={eligibleAirdrops} isOpen={showClaimModal} onClose={() => setShowClaimModal(false)} />
     </div>
   );
 }
