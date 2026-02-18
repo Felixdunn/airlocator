@@ -1,28 +1,33 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { WalletScanner } from "@/lib/wallet-scanner";
 import { Connection } from "@solana/web3.js";
 import { EligibilityChecker } from "@/lib/eligibility-checker";
 import { Airdrop, EligibilityResult } from "@/lib/types/airdrop";
 import { airdrops } from "@/lib/data/airdrops";
-import { Loader2, Wallet, CheckCircle2, XCircle, Coins } from "lucide-react";
+import { Loader2, Wallet, CheckCircle2, XCircle, Coins, RefreshCw } from "lucide-react";
 import { cn, formatUSD, shortenAddress } from "@/lib/utils";
 import { AirdropCard } from "./AirdropCard";
+import { motion, AnimatePresence } from "framer-motion";
 
 interface WalletScannerProps {
   onEligibilityUpdate?: (results: EligibilityResult[]) => void;
 }
 
 export function WalletScannerComponent({ onEligibilityUpdate }: WalletScannerProps) {
-  const { connected, publicKey, connect } = useWallet();
+  const { connected, publicKey, connect, disconnect } = useWallet();
   const [isScanning, setIsScanning] = useState(false);
   const [scanComplete, setScanComplete] = useState(false);
   const [eligibilityResults, setEligibilityResults] = useState<EligibilityResult[]>([]);
   const [walletValue, setWalletValue] = useState<number>(0);
   const [error, setError] = useState<string>();
+  const [isClient, setIsClient] = useState(false);
+
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
 
   const handleScan = async () => {
     if (!publicKey) return;
@@ -32,7 +37,7 @@ export function WalletScannerComponent({ onEligibilityUpdate }: WalletScannerPro
     setScanComplete(false);
 
     try {
-      const connection = new Connection("https://api.mainnet-beta.solana.com");
+      const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
       const scanner = new WalletScanner(connection);
       
       // Scan wallet activity
@@ -49,6 +54,7 @@ export function WalletScannerComponent({ onEligibilityUpdate }: WalletScannerPro
       onEligibilityUpdate?.(results);
       setScanComplete(true);
     } catch (err) {
+      console.error("Scan error:", err);
       setError(err instanceof Error ? err.message : "Failed to scan wallet");
     } finally {
       setIsScanning(false);
@@ -56,19 +62,23 @@ export function WalletScannerComponent({ onEligibilityUpdate }: WalletScannerPro
   };
 
   useEffect(() => {
-    if (connected && publicKey) {
+    if (connected && publicKey && isClient) {
       handleScan();
     } else {
       setEligibilityResults([]);
       setScanComplete(false);
       setWalletValue(0);
     }
-  }, [connected, publicKey]);
+  }, [connected, publicKey, isClient]);
 
   const eligibleCount = eligibilityResults.filter(r => r.eligible).length;
   const totalValue = eligibilityResults
     .filter(r => r.eligible && r.estimatedValue)
     .reduce((sum, r) => sum + (r.estimatedValue || 0), 0);
+
+  if (!isClient) {
+    return null;
+  }
 
   if (!connected) {
     return (
@@ -91,8 +101,12 @@ export function WalletScannerComponent({ onEligibilityUpdate }: WalletScannerPro
           onClick={connect}
           className="mt-6 inline-flex items-center rounded-lg bg-primary px-6 py-3 text-base font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
         >
+          <Wallet className="mr-2 h-5 w-5" />
           Connect Wallet
         </button>
+        <p className="mt-4 text-xs text-muted-foreground">
+          Supported: Phantom, Solflare, and other Solana wallets
+        </p>
       </motion.div>
     );
   }
@@ -120,20 +134,31 @@ export function WalletScannerComponent({ onEligibilityUpdate }: WalletScannerPro
             </div>
           </div>
           
-          <button
-            onClick={handleScan}
-            disabled={isScanning}
-            className="inline-flex items-center rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent transition-colors disabled:opacity-50"
-          >
-            {isScanning ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Scanning...
-              </>
-            ) : (
-              "Rescan"
-            )}
-          </button>
+          <div className="flex space-x-2">
+            <button
+              onClick={handleScan}
+              disabled={isScanning}
+              className="inline-flex items-center rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent transition-colors disabled:opacity-50"
+            >
+              {isScanning ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Scanning...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Rescan
+                </>
+              )}
+            </button>
+            <button
+              onClick={disconnect}
+              className="inline-flex items-center rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors"
+            >
+              Disconnect
+            </button>
+          </div>
         </div>
       </motion.div>
 

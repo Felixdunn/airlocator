@@ -3,7 +3,7 @@
 import { motion } from "framer-motion";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import Link from "next/link";
-import { Coins, Search, Menu, X } from "lucide-react";
+import { Coins, Search, Menu, X, Wallet } from "lucide-react";
 import { useState } from "react";
 
 export function Header() {
@@ -30,11 +30,14 @@ export function Header() {
         </nav>
 
         <div className="flex items-center space-x-4">
-          <WalletMultiButton className="!bg-primary !text-primary-foreground !hover:bg-primary/90 !transition-all !duration-300 !font-medium !rounded-lg !px-4 !py-2" />
+          <WalletMultiButton 
+            className="!bg-primary !text-primary-foreground !hover:bg-primary/90 !transition-all !duration-300 !font-medium !rounded-lg !px-4 !py-2"
+          />
           
           <button
             className="md:hidden p-2"
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            aria-label="Toggle menu"
           >
             {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </button>
