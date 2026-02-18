@@ -24,12 +24,13 @@ export async function GET(request: NextRequest) {
       search: searchParams.get("search") ? sanitizeString(searchParams.get("search")!) : undefined,
     };
     
-    // Default to live/unverified if no status specified
-    if (!filters.status) {
-      filters.status = "live";
-    }
+    // Get ALL airdrops - no status filter by default
+    let airdrops = await getAllAirdrops();
     
-    let airdrops = await getAirdropsByFilters(filters);
+    // Apply category filter if specified
+    if (filters.category) {
+      airdrops = airdrops.filter(a => a.categories.includes(filters.category!));
+    }
     
     // Filter by recency - only show airdrops discovered in last 90 days
     const ninetyDaysAgo = Date.now() - (90 * 24 * 60 * 60 * 1000);

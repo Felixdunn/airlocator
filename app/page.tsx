@@ -54,7 +54,7 @@ export default function Home() {
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
   const [showClaimModal, setShowClaimModal] = useState(false);
   const [lastScanTime, setLastScanTime] = useState<Date | null>(null);
-  const [lastScanResults, setLastScanResults] = useState<{ new: number; enriched: number; filtered: number } | null>(null);
+  const [lastScanResults, setLastScanResults] = useState<{ new: number; enriched: number; filtered: number; airdrops?: ApiAirdrop[] } | null>(null);
   const [showScanDetails, setShowScanDetails] = useState(false);
   const { connected } = useWallet();
   const apiSettings = hasApiSettings();
@@ -71,6 +71,7 @@ export default function Home() {
       const response = await fetch("/api/airdrops");
       const data = await response.json();
       const allAirdrops = data.data || [];
+      console.log(`[Frontend] Fetched ${allAirdrops.length} airdrops from API`);
       setAirdrops(allAirdrops);
       
       // Only show recently discovered airdrops as featured (last 7 days)
@@ -156,12 +157,24 @@ export default function Home() {
       if (result.success) {
         setScanProgress({ stage: 'Scan complete!', percent: 100, etaSeconds: 0 });
         setLastScanTime(new Date());
+        
+        // Use the airdrops returned directly from the scan
+        const scannedAirdrops = result.data.airdrops || [];
         setLastScanResults({
           new: result.data.newAirdrops,
           enriched: result.data.enrichedWithAI || 0,
           filtered: result.data.filteredOut || 0,
+          airdrops: scannedAirdrops,
         });
         setShowScanDetails(true);
+        
+        // Merge scanned airdrops with existing ones
+        setAirdrops(prev => {
+          const existingIds = new Set(prev.map(a => a.id));
+          const newAirdrops = scannedAirdrops.filter(a => !existingIds.has(a.id));
+          return [...newAirdrops, ...prev];
+        });
+        
         await fetchAirdrops();
         
         setTimeout(() => {
@@ -276,10 +289,36 @@ export default function Home() {
                   </div>
                 </div>
                 
+                {/* Show scanned airdrops directly */}
+                {lastScanResults.airdrops && lastScanResults.airdrops.length > 0 && (
+                  <div className="mt-6">
+                    <h3 className="text-lg font-semibold mb-4">Discovered Airdrops ({lastScanResults.airdrops.length})</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {lastScanResults.airdrops.slice(0, 6).map((airdrop: ApiAirdrop) => (
+                        <AirdropCard 
+                          key={airdrop.id} 
+                          airdrop={{
+                            ...airdrop, 
+                            live: airdrop.status === "live" || airdrop.status === "unverified", 
+                            createdAt: new Date(airdrop.createdAt), 
+                            updatedAt: new Date(airdrop.updatedAt), 
+                            source: { type: "github" as const, url: airdrop.website }
+                          }} 
+                        />
+                      ))}
+                    </div>
+                    {lastScanResults.airdrops.length > 6 && (
+                      <p className="text-sm text-muted-foreground mt-4">
+                        + {lastScanResults.airdrops.length - 6} more airdrops. Scroll down to see all.
+                      </p>
+                    )}
+                  </div>
+                )}
+                
                 {/* View Details Button */}
                 <button 
                   onClick={() => setShowScanDetails(!showScanDetails)}
-                  className="inline-flex items-center text-sm text-primary hover:underline"
+                  className="mt-6 inline-flex items-center text-sm text-primary hover:underline"
                 >
                   {showScanDetails ? "Hide" : "View"} scan details
                 </button>

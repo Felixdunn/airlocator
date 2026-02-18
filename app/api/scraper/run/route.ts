@@ -1,5 +1,5 @@
 // POST /api/scraper/run - Enhanced with better progress tracking and all sources
-// Uses Server-Sent Events for live progress updates
+// Returns discovered airdrops directly in response so they show immediately
 
 import { NextRequest, NextResponse } from "next/server";
 import { strictRateLimit } from "@/lib/middleware/rate-limit";
@@ -104,6 +104,7 @@ export async function POST(request: NextRequest) {
       errors: result.errors,
     };
     
+    // Return the actual airdrops in the response so they show immediately
     return NextResponse.json({
       success: true,
       data: {
@@ -114,6 +115,30 @@ export async function POST(request: NextRequest) {
         filteredOut: result.newAirdrops.length - ongoingAirdrops.length,
         errors: result.errors,
         sources: result.sources,
+        // Include the actual airdrops so frontend can display them immediately
+        airdrops: ongoingAirdrops.map(a => ({
+          id: a.id,
+          name: a.name,
+          symbol: a.symbol,
+          description: a.description,
+          website: a.website,
+          twitter: a.twitter,
+          discord: a.discord,
+          telegram: a.telegram,
+          claimUrl: a.claimUrl,
+          claimType: a.claimType,
+          categories: a.categories,
+          frictionLevel: a.frictionLevel,
+          verified: a.verified,
+          featured: a.featured,
+          status: a.status,
+          chains: a.chains,
+          primaryChain: a.primaryChain,
+          estimatedValueUSD: a.estimatedValueUSD,
+          discoveredAt: a.discoveredAt,
+          createdAt: a.createdAt,
+          updatedAt: a.updatedAt,
+        })),
       },
     });
   } catch (error) {
