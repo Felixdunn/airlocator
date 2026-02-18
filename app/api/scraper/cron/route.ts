@@ -1,17 +1,10 @@
 // GET /api/scraper/cron - Vercel Cron endpoint
-// Automatically triggered every 6 hours by Vercel
+// Uses environment variables for API keys (set in Vercel dashboard)
 
 import { NextResponse } from "next/server";
 import { runScraper } from "@/lib/scraper";
 
 export async function GET() {
-  // Verify this is a Vercel cron request
-  const authHeader = await import("next/headers").then(h => h.headers());
-  const cronSecret = process.env.CRON_SECRET;
-  
-  // In production, verify the Vercel cron header
-  // For now, just log and proceed
-  
   console.log("Cron scraper triggered at", new Date().toISOString());
   
   try {
@@ -19,6 +12,9 @@ export async function GET() {
       sources: ["github", "rss", "twitter"],
       limit: 100,
       minConfidence: 0.55,
+      // Use environment variables for cron (set in Vercel dashboard)
+      githubToken: process.env.GITHUB_TOKEN,
+      twitterBearerToken: process.env.TWITTER_BEARER_TOKEN,
     });
     
     return NextResponse.json({
@@ -34,10 +30,7 @@ export async function GET() {
   } catch (error) {
     console.error("Cron scraper failed:", error);
     return NextResponse.json(
-      { 
-        success: false, 
-        error: error instanceof Error ? error.message : "Unknown error",
-      },
+      { success: false, error: error instanceof Error ? error.message : "Unknown error" },
       { status: 500 }
     );
   }

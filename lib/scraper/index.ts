@@ -1,5 +1,4 @@
-// Main Scraper Orchestrator - Coordinates all scrapers and deduplicates results
-// Runs periodically via Vercel Cron
+// Scraper Orchestrator - Updated to accept API keys from request
 
 import { scrapeGitHub } from "./github-scraper";
 import { scrapeRSSFeeds } from "./rss-scraper";
@@ -11,6 +10,9 @@ export interface ScraperOptions {
   sources?: ("github" | "rss" | "twitter")[];
   limit?: number;
   minConfidence?: number;
+  // API keys from cookies/request
+  githubToken?: string;
+  twitterBearerToken?: string;
 }
 
 export interface ScraperResult {
@@ -43,147 +45,88 @@ export async function runScraper(options?: ScraperOptions): Promise<ScraperResul
   };
   
   console.log(`Starting airdrop scraper at ${results.scrapedAt.toISOString()}`);
-  console.log(`Sources: ${sources.join(", ")}`);
   
-  // Run scrapers in parallel
   const scraperPromises: Promise<DiscoveryResult | null>[] = [];
   
   if (sources.includes("github")) {
     scraperPromises.push(
-      scrapeGitHub({ limit: Math.ceil(limit / 2) })
-        .catch(err => ({
-          success: false,
-          airdrops: [],
-          errors: [`GitHub: ${err.message}`],
-          source: "github",
-          scrapedAt: new Date(),
-        }))
+      scrapeGitHub({ limit: Math.ceil(limit / 2), githubToken: options?.githubToken })
+        .catch(err => ({ success: false, airdrops: [], errors: [`GitHub: ${err.message}`], source: "github", scrapedAt: new Date() }))
     );
   }
   
   if (sources.includes("rss")) {
     scraperPromises.push(
       scrapeRSSFeeds({ limit: Math.ceil(limit / 2) })
-        .catch(err => ({
-          success: false,
-          airdrops: [],
-          errors: [`RSS: ${err.message}`],
-          source: "rss",
-          scrapedAt: new Date(),
-        }))
+        .catch(err => ({ success: false, airdrops: [], errors: [`RSS: ${err.message}`], source: "rss", scrapedAt: new Date() }))
     );
   }
   
   if (sources.includes("twitter")) {
     scraperPromises.push(
-      scrapeTwitter({ limit: Math.ceil(limit / 2) })
-        .catch(err => ({
-          success: false,
-          airdrops: [],
-          errors: [`Twitter: ${err.message}`],
-          source: "twitter",
-          scrapedAt: new Date(),
-        }))
+      scrapeTwitter({ limit: Math.ceil(limit / 2), twitterBearerToken: options?.twitterBearerToken })
+        .catch(err => ({ success: false, airdrops: [], errors: [`Twitter: ${err.message}`], source: "twitter", scrapedAt: new Date() }))
     );
   }
   
   const scraperResults = await Promise.all(scraperPromises);
-  
-  // Process results
   const allDiscovered: Partial<Airdrop>[] = [];
   
   for (const result of scraperResults) {
     if (!result) continue;
-    
     results.totalDiscovered += result.airdrops.length;
     results.errors.push(...(result.errors || []));
     
-    // Store source result
-    if (result.source === "github") {
-      results.sources.github = result;
-    } else if (result.source === "rss") {
-      results.sources.rss = result;
-    } else if (result.source === "twitter") {
-      results.sources.twitter = result;
-    }
+    if (result.source === "github") results.sources.github = result;
+    else if (result.source === "rss") results.sources.rss = result;
+    else if (result.source === "twitter") results.sources.twitter = result;
     
-    // Filter by confidence and add to processing queue
     for (const airdrop of result.airdrops) {
       const sourceConfidence = airdrop.sources?.[0]?.confidence || 0;
-      if (sourceConfidence >= minConfidence) {
-        allDiscovered.push(airdrop);
-      }
+      if (sourceConfidence >= minConfidence) allDiscovered.push(airdrop);
     }
   }
   
-  console.log(`Total discovered: ${results.totalDiscovered}`);
-  console.log(`After confidence filter: ${allDiscovered.length}`);
-  
-  // Deduplicate and merge results
   const processed = await deduplicateAndMerge(allDiscovered);
   
-  // Save to store
   for (const airdrop of processed.new) {
-    try {
-      await saveAirdrop(airdrop);
-      results.newAirdrops.push(airdrop);
-    } catch (error) {
-      console.error(`Failed to save airdrop ${airdrop.id}:`, error);
-      results.errors.push(`Failed to save ${airdrop.name}: ${error instanceof Error ? error.message : 'Unknown'}`);
-    }
+    try { await saveAirdrop(airdrop); results.newAirdrops.push(airdrop); }
+    catch (error) { results.errors.push(`Failed to save ${airdrop.name}`); }
   }
   
   for (const airdrop of processed.updated) {
-    try {
-      await saveAirdrop(airdrop);
-      results.updatedAirdrops.push(airdrop);
-    } catch (error) {
-      console.error(`Failed to update airdrop ${airdrop.id}:`, error);
-      results.errors.push(`Failed to update ${airdrop.name}: ${error instanceof Error ? error.message : 'Unknown'}`);
-    }
+    try { await saveAirdrop(airdrop); results.updatedAirdrops.push(airdrop); }
+    catch (error) { results.errors.push(`Failed to update ${airdrop.name}`); }
   }
   
   results.success = results.newAirdrops.length > 0 || results.updatedAirdrops.length > 0;
-  
   console.log(`Scraper completed: ${results.newAirdrops.length} new, ${results.updatedAirdrops.length} updated`);
   
   return results;
 }
 
-async function deduplicateAndMerge(
-  discovered: Partial<Airdrop>[]
-): Promise<{ new: Airdrop[]; updated: Airdrop[] }> {
+async function deduplicateAndMerge(discovered: Partial<Airdrop>[]): Promise<{ new: Airdrop[]; updated: Airdrop[] }> {
   const newAirdrops: Airdrop[] = [];
   const updatedAirdrops: Airdrop[] = [];
-  
-  // Group by potential match (name or URL)
   const existingAirdrops = await getAllAirdrops();
   const existingByName = new Map<string, Airdrop>();
   const existingByUrl = new Map<string, Airdrop>();
   
   for (const existing of existingAirdrops) {
     existingByName.set(existing.name.toLowerCase(), existing);
-    if (existing.website) {
-      existingByUrl.set(normalizeUrl(existing.website), existing);
-    }
+    if (existing.website) existingByUrl.set(normalizeUrl(existing.website), existing);
   }
   
   for (const item of discovered) {
     const id = generateAirdropId(item.name || "unknown");
-    
-    // Check for existing match
     const existingByNameMatch = existingByName.get((item.name || "").toLowerCase());
     const existingByUrlMatch = item.website ? existingByUrl.get(normalizeUrl(item.website)) : null;
-    
     const existing = existingByNameMatch || existingByUrlMatch;
     
     if (existing) {
-      // Merge with existing
-      const merged = mergeAirdrops(existing, item);
-      updatedAirdrops.push(merged);
+      updatedAirdrops.push(mergeAirdrops(existing, item));
     } else {
-      // Create new
-      const newAirdrop: Airdrop = {
+      newAirdrops.push({
         id,
         name: item.name || "Unknown",
         symbol: item.symbol || deriveSymbol(item.name || "Unknown"),
@@ -205,8 +148,7 @@ async function deduplicateAndMerge(
         updatedAt: new Date(),
         estimatedValueUSD: item.estimatedValueUSD,
         estimatedValueRange: item.estimatedValueRange,
-      };
-      newAirdrops.push(newAirdrop);
+      } as Airdrop);
     }
   }
   
@@ -214,7 +156,6 @@ async function deduplicateAndMerge(
 }
 
 function mergeAirdrops(existing: Airdrop, newItem: Partial<Airdrop>): Airdrop {
-  // Merge sources
   const existingSources = new Set(existing.sources.map(s => s.url));
   const newSources = (newItem.sources || []).filter(s => !existingSources.has(s.url));
   
@@ -239,24 +180,16 @@ function mergeAirdrops(existing: Airdrop, newItem: Partial<Airdrop>): Airdrop {
 }
 
 function generateAirdropId(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "");
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
 function normalizeUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    return parsed.hostname.replace("www.", "");
-  } catch {
-    return url.toLowerCase();
-  }
+  try { return new URL(url).hostname.replace("www.", ""); }
+  catch { return url.toLowerCase(); }
 }
 
 function deriveSymbol(name: string): string {
   return name.slice(0, 4).toUpperCase().replace(/[^A-Z]/g, "");
 }
 
-// Export individual scrapers for API routes
 export { scrapeGitHub, scrapeRSSFeeds, scrapeTwitter };

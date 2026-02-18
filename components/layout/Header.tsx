@@ -1,8 +1,9 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import Link from "next/link";
-import { Coins, Menu, X } from "lucide-react";
+import { Coins, Menu, X, Settings } from "lucide-react";
 import { useState } from "react";
 import { WalletButton } from "@/components/wallet/WalletButton";
 
@@ -30,6 +31,14 @@ export function Header() {
         </nav>
 
         <div className="flex items-center space-x-4">
+          <Link
+            href="/settings"
+            className="p-2 text-muted-foreground hover:text-foreground transition-colors"
+            title="API Settings"
+          >
+            <Settings className="h-5 w-5" />
+          </Link>
+          
           <WalletButton />
           
           <button
@@ -58,6 +67,9 @@ export function Header() {
             </Link>
             <Link href="/how-to-claim-solana-airdrops" className="text-sm font-medium text-muted-foreground hover:text-foreground">
               Guide
+            </Link>
+            <Link href="/settings" className="text-sm font-medium text-muted-foreground hover:text-foreground">
+              Settings
             </Link>
           </nav>
         </motion.div>
